@@ -20,7 +20,10 @@ jobs:
           dotnet-version: 10.0.x
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: connect
+          workspaces: |
+            connect
+            tui
       - run: dotnet test service/Comptroller.slnx
       # The tray app's tests drive the service built by the step above.
       - run: cargo test --manifest-path connect/Cargo.toml
+      - run: cargo test --manifest-path tui/Cargo.toml
