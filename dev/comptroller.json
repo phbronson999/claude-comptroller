@@ -1,0 +1,17 @@
+{
+  "Proxy": {
+    "ListenUrl": "http://localhost:8080",
+    "UpstreamUrl": "http://localhost:5055",
+    "ActivityTimeoutMinutes": 10,
+    "StripForwardedHeaders": true
+  },
+  "Identity": {
+    "TokenHeaderName": "X-Comptroller-Token"
+  },
+  "Logging": {
+    "Folder": "logs",
+    "Level": "Information",
+    "RetainedFiles": 14,
+    "FileSizeLimitMb": 20
+  }
+}
