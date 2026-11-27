@@ -1,0 +1,39 @@
+name: release
+
+# Push a tag like v0.2.0 (matching the version in the four files build.ps1 checks) to build,
+# test and publish a release with the two zips and their checksums.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            connect
+            tui
+      - name: Build and test
+        shell: pwsh
+        run: ./build.ps1 -Test
+      - name: Check the tag matches the version
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem dist -Filter 'claude-comptroller-*-win-x64.zip' | Where-Object Name -notlike '*connect*'
+          $version = $zip.Name -replace '^claude-comptroller-(.+)-win-x64\.zip$', '$1'
+          if ("v$version" -ne $env:GITHUB_REF_NAME) { throw "Tag $env:GITHUB_REF_NAME doesn't match version $version." }
+      - name: Publish the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create $env:GITHUB_REF_NAME (Get-ChildItem dist).FullName --title "claude-comptroller $env:GITHUB_REF_NAME" --generate-notes

@@ -273,12 +273,13 @@ fn draw_vs_baseline(lines: &mut Vec<Line<'static>>, app: &App, r: &Report, symbo
         lines.push(Line::from(Span::styled(format!("This is the baseline, \"{}\".", b.title()), theme::faint())));
         return;
     }
-    let (Some(bc), Some(range)) = (&b.cost, &r.range) else {
+    let Some(bc) = &b.cost else {
         lines.push(Line::from(Span::styled(format!("\"{}\" has no cost report to compare with.", b.title()), theme::faint())));
         return;
     };
-    let days = range.days().max(1) as f64;
-    let base_days = bc.range.as_ref().map(|r| r.days()).unwrap_or(b.days()).max(1) as f64;
+    // From the first recorded day, so a period that began before recording isn't diluted.
+    let days = r.recorded_days() as f64;
+    let base_days = bc.recorded_days() as f64;
     let row = |k: &str, now: String, before: String, delta: Span<'static>| {
         Line::from(vec![
             Span::styled(format!("{k:<15}"), theme::muted()),

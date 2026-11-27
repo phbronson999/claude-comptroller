@@ -148,6 +148,7 @@ try
     app.UseDeviceTokens();
     app.UseRecording();
 
+    app.MapDownloads(configPath);
     app.MapComptrollerEndpoints();
     app.MapReverseProxy();
 

@@ -13,6 +13,8 @@ mod cost_screen;
 mod dashboard_screen;
 mod logo;
 mod radar_screen;
+#[cfg(test)]
+mod screenshots;
 mod settings_screen;
 // Copied as-is from Code Keepsake; not every color is used here.
 #[allow(dead_code)]

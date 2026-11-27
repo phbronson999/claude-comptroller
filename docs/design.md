@@ -74,7 +74,7 @@ People use multiple computers, so identity is **user + device**.
   - `/_comptroller/me`: token auth. Returns user, device, status, expiry, and today's counts (requests, 429s, last request) for the tray popup.
   - `/_comptroller/disconnect`: token auth, suspends the device.
   - `/_comptroller/reconnect`: Negotiate. Rechecks the group, then reactivates.
-  - `/_comptroller/download`: serves the connect installer and a one-page setup guide.
+  - `/_comptroller/download`: serves the connect installer and a one-page setup guide. Built in step 11: an HTML page (no client header needed, no user data) and the exe from `downloads\` beside comptroller.json, where Install writes the copy built into the admin terminal.
   - `GET /health` on a separate listener bound to `127.0.0.1:<adminPort>`: version, uptime, config status, schema version, listen URL.
 
 ## TUI (Rust, server)
@@ -241,6 +241,15 @@ Requirement: the service, TUI and tray app must all run and be testable on a sin
   - retention prunes old rows
   - an invalid config keeps the last good one
 - **Unit tests:** the Rust TUI tests run against `contracts/` samples. The tray app's settings writer is tested against temp folders, including merging with existing settings and restoring the backup.
+- **README pictures.** `tools/screenshots.ps1` seeds a temporary database with the example people, starts the service in the background, and runs an ignored test in the admin terminal (`src/screenshots.rs`). That test draws each screen into a buffer, turns the buffer into an SVG cell by cell (block and box-drawing characters as shapes), and renders it to PNG with resvg. It refuses to write a picture containing this computer's user or computer name.
+
+## Release (built in step 11)
+
+- `build.ps1` checks that the four version numbers agree, publishes the service as one self-contained exe, builds the tray app with Tauri's `custom-protocol` feature (the UI served from inside the exe, as the Tauri CLI does), then builds the admin terminal with both exes embedded (`COMPTROLLER_SERVICE_EXE`, `COMPTROLLER_CONNECT_EXE`). `-Test` runs every suite first.
+- It writes two zips and `SHA256SUMS.txt` to `dist\`: the server zip (the admin terminal, sample config, pricing table, README, LICENSE) and the tray app zip, for Intune or Group Policy.
+- Install writes the tray app to `downloads\` beside comptroller.json, so the service's setup page serves it; Uninstall removes it with the service exe.
+- Pushing a `v*` tag runs `.github/workflows/release.yml`: `build.ps1 -Test`, a check that the tag matches the version, then a GitHub release with the zips and checksums.
+- No installer and no code signing yet: Windows SmartScreen may warn on first run, which the setup page explains.
 
 ## Open decisions
 

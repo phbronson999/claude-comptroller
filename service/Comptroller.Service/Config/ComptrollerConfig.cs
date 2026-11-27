@@ -16,12 +16,12 @@ public sealed record ComptrollerConfig
         var errors = new List<string>();
 
         if (Proxy is null) return ["Proxy section is missing."];
-        if (!IsHttpUrl(Proxy.ListenUrl)) errors.Add("Proxy.ListenUrl must be an http:// or https:// URL.");
+        if (!IsHttpUrl(ListenAsUrl(Proxy.ListenUrl))) errors.Add("Proxy.ListenUrl must be an http:// or https:// URL; + or * as the host listens on every address.");
         if (!IsHttpUrl(Proxy.UpstreamUrl)) errors.Add("Proxy.UpstreamUrl must be an http:// or https:// URL.");
         if (Proxy.ActivityTimeoutMinutes is < 1 or > 60) errors.Add("Proxy.ActivityTimeoutMinutes must be 1 to 60.");
         if (Proxy.ShutdownTimeoutSeconds is < 5 or > 600) errors.Add("Proxy.ShutdownTimeoutSeconds must be 5 to 600.");
         if (Proxy.AdminPort is < 1 or > 65535) errors.Add("Proxy.AdminPort must be a port number.");
-        else if (Uri.TryCreate(Proxy.ListenUrl, UriKind.Absolute, out var listen) && listen.Port == Proxy.AdminPort)
+        else if (Uri.TryCreate(ListenAsUrl(Proxy.ListenUrl), UriKind.Absolute, out var listen) && listen.Port == Proxy.AdminPort)
             errors.Add("Proxy.AdminPort must differ from the port in Proxy.ListenUrl.");
 
         if (string.IsNullOrWhiteSpace(Logging?.Folder)) errors.Add("Logging.Folder must not be empty.");
@@ -56,6 +56,13 @@ public sealed record ComptrollerConfig
 
         return errors;
     }
+
+    /// <summary>
+    /// Kestrel takes + or * as the host for every address, which isn't a valid URI host, so
+    /// check the listen URL with a stand-in host.
+    /// </summary>
+    private static string? ListenAsUrl(string? value) =>
+        value?.Replace("://+", "://any-address", StringComparison.Ordinal).Replace("://*", "://any-address", StringComparison.Ordinal);
 
     private static bool IsHttpUrl(string? value) =>
         Uri.TryCreate(value, UriKind.Absolute, out var uri)

@@ -24,6 +24,16 @@ pub const EMBEDDED: Option<&[u8]> = Some(include_bytes!(env!("COMPTROLLER_SERVIC
 #[cfg(not(embedded_service))]
 pub const EMBEDDED: Option<&[u8]> = None;
 
+/// The tray app built into this program, if this build has one.
+#[cfg(embedded_connect)]
+pub const EMBEDDED_CONNECT: Option<&[u8]> = Some(include_bytes!(env!("COMPTROLLER_CONNECT_EXE_PATH")));
+#[cfg(not(embedded_connect))]
+pub const EMBEDDED_CONNECT: Option<&[u8]> = None;
+
+pub const CONNECT_EXE: &str = "claude-comptroller-connect.exe";
+/// Beside comptroller.json: the service serves the tray app from here at /_comptroller/download.
+pub const DOWNLOADS: &str = "downloads";
+
 const RESTART_DELAYS: [u64; 3] = [5, 5, 30];
 
 #[derive(Clone, Debug)]
@@ -62,6 +72,11 @@ pub fn install_plan(name: &str, dir: &Path) -> Plan {
     let steps = vec![
         step("Check admin rights", "needs an elevated terminal".into(), None),
         step("Write service exe", exe.display().to_string(), None),
+        step(
+            "Write tray app",
+            format!(r"{}\{CONNECT_EXE} · served at /_comptroller/download", dir.join(DOWNLOADS).display()),
+            None,
+        ),
         step("Write default config", format!("{} · kept if it already exists", dir.join(CONFIG_FILE).display()), None),
         step(
             "Register service",
@@ -87,7 +102,7 @@ pub fn uninstall_plan(name: &str, place: &Place, config: &Config, remove_data: b
     let mut steps = vec![
         step("Stop the service", "requests in flight finish first".into(), Some(format!("sc.exe stop {name}"))),
         step("Delete the service", name.into(), Some(format!("sc.exe delete {name}"))),
-        step("Remove service exe", place.folder().join(SERVICE_EXE).display().to_string(), None),
+        step("Remove service exe", format!(r"{} · and {DOWNLOADS}\{CONNECT_EXE}", place.folder().join(SERVICE_EXE).display()), None),
     ];
     if remove_data {
         steps.push(step(
@@ -119,6 +134,22 @@ pub fn install(plan: &Plan, progress: &Sender<Progress>) {
                 |_| crate::bytes(bytes.len() as u64),
             )?;
             Ok(format!("{} · {}", exe.display(), crate::bytes(bytes.len() as u64)))
+        }),
+        Box::new(|| {
+            let Some(bytes) = EMBEDDED_CONNECT else {
+                return Ok("not in this build: the download page will say so. build.ps1 includes it.".into());
+            };
+            let folder = dir.join(DOWNLOADS);
+            let file = folder.join(CONNECT_EXE);
+            activity::track(
+                format!("copy the tray app built into claude-comptroller.exe to \"{}\"", file.display()),
+                || -> Result<(), String> {
+                    fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
+                    fs::write(&file, bytes).map_err(|e| format!("{}: {e}", file.display()))
+                },
+                |_| crate::bytes(bytes.len() as u64),
+            )?;
+            Ok(format!("{} · {}", file.display(), crate::bytes(bytes.len() as u64)))
         }),
         Box::new(|| {
             if config_path.exists() {
@@ -195,7 +226,15 @@ pub fn uninstall(plan: &Plan, place: &Place, config: &Config, progress: &Sender<
             let id = activity::start(format!("del \"{}\"", exe.display()));
             let result = remove_exe(&exe);
             activity::finish(id, result.is_ok(), result.clone().unwrap_or_else(|e| e));
-            result
+            result?;
+            // The tray app the download page served, and its folder if nothing else is in it.
+            let connect = place.folder().join(DOWNLOADS).join(CONNECT_EXE);
+            if connect.exists() {
+                activity::track(format!("del \"{}\"", connect.display()), || fs::remove_file(&connect), |_| "removed".into())
+                    .map_err(|e| format!("Couldn't remove {}: {e}", connect.display()))?;
+                let _ = fs::remove_dir(place.folder().join(DOWNLOADS));
+            }
+            Ok("removed".into())
         }),
     ];
     fn remove_exe(exe: &Path) -> Result<String, String> {
@@ -339,10 +378,11 @@ mod tests {
     #[test]
     fn plans_show_the_equivalent_commands() {
         let plan = install_plan("claude-comptroller", Path::new(r"C:\Program Files\claude-comptroller"));
-        assert_eq!(plan.steps.len(), 7);
-        let register = plan.steps[3].command.as_deref().unwrap();
+        assert_eq!(plan.steps.len(), 8);
+        assert!(plan.steps[2].detail.ends_with("served at /_comptroller/download"));
+        let register = plan.steps[4].command.as_deref().unwrap();
         assert!(register.contains("start= delayed-auto") && register.contains(r#"obj= "NT SERVICE\claude-comptroller""#));
-        assert!(plan.steps[4].command.as_deref().unwrap().ends_with("restart/5000/restart/5000/restart/30000"));
+        assert!(plan.steps[5].command.as_deref().unwrap().ends_with("restart/5000/restart/5000/restart/30000"));
 
         let place = Place { config_path: PathBuf::from(r"C:\svc\comptroller.json") };
         assert_eq!(uninstall_plan("x", &place, &Config::default(), false).steps.len(), 3);
