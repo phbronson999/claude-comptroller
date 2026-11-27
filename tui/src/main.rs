@@ -8,10 +8,12 @@
 
 mod app;
 mod logo;
+mod settings_screen;
 // Copied as-is from Code Keepsake; not every color is used here.
 #[allow(dead_code)]
 mod theme;
 mod ui;
+mod users_screen;
 mod widgets;
 
 use std::path::PathBuf;
@@ -83,7 +85,7 @@ mod tests {
         });
         for (width, height) in [(200, 50), (80, 24), (40, 12)] {
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-            for screen in [Screen::Terminal, Screen::Status, Screen::Preflight, Screen::Install, Screen::Uninstall] {
+            for screen in [Screen::Terminal, Screen::Status, Screen::Preflight, Screen::Install, Screen::Uninstall, Screen::Settings, Screen::Users] {
                 app.screen = screen;
                 terminal.draw(|f| super::ui::draw(f, &app)).unwrap();
                 for key in [KeyCode::Char('?'), KeyCode::Esc] {
@@ -96,6 +98,21 @@ mod tests {
                 app.on_key(KeyEvent::from(key));
                 terminal.draw(|f| super::ui::draw(f, &app)).unwrap();
             }
+            assert_eq!(app.screen, Screen::Terminal);
+
+            // Settings with a real file: every group, an edit, then leaving without saving.
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("comptroller.json"), comptroller_admin::config::SAMPLE).unwrap();
+            let mut keys = vec![KeyCode::Char('c')];
+            keys.extend([KeyCode::Right; 10]);
+            keys.extend([KeyCode::Enter, KeyCode::Char('X'), KeyCode::Enter, KeyCode::Esc]);
+            for key in keys {
+                app.on_key(KeyEvent::from(key));
+                terminal.draw(|f| super::ui::draw(f, &app)).unwrap();
+            }
+            assert_eq!(app.settings.pending.len(), 1, "the edited organization name");
+            app.on_key(KeyEvent::from(KeyCode::Char('d')));
+            assert!(app.settings.pending.is_empty());
             assert_eq!(app.screen, Screen::Terminal);
         }
         let buffer = Terminal::new(TestBackend::new(200, 50)).unwrap().draw(|f| super::ui::draw(f, &app)).unwrap().buffer.clone();

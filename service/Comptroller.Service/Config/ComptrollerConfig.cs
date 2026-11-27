@@ -25,6 +25,14 @@ public sealed record ComptrollerConfig
             errors.Add("Proxy.AdminPort must differ from the port in Proxy.ListenUrl.");
 
         if (string.IsNullOrWhiteSpace(Logging?.Folder)) errors.Add("Logging.Folder must not be empty.");
+        if (Logging is not null)
+        {
+            string[] levels = ["Verbose", "Debug", "Information", "Warning", "Error", "Fatal"];
+            if (!levels.Contains(Logging.Level, StringComparer.OrdinalIgnoreCase))
+                errors.Add("Logging.Level must be Verbose, Debug, Information, Warning, Error or Fatal.");
+            if (Logging.RetainedFiles is < 1 or > 365) errors.Add("Logging.RetainedFiles must be 1 to 365.");
+            if (Logging.FileSizeLimitMb is < 1 or > 1024) errors.Add("Logging.FileSizeLimitMb must be 1 to 1024.");
+        }
         if (string.IsNullOrWhiteSpace(Data?.Folder)) errors.Add("Data.Folder must not be empty.");
 
         if (Identity is null) return [.. errors, "Identity section is invalid."];

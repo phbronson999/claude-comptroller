@@ -61,7 +61,7 @@ try
 {
     var identityStore = new IdentityStore(databasePath);
 
-    // Manual identity mode, until the admin TUI can do this: print a one-time code and exit.
+    // Manual identity mode without the admin terminal (whose Users screen does the same): print a one-time code and exit.
     var codeArg = Array.IndexOf(args, "--create-code");
     if (codeArg >= 0)
     {

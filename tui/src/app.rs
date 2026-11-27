@@ -7,6 +7,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use comptroller_admin::config::{self, Config, Place};
+use comptroller_admin::directory::{self, Directory};
 use comptroller_admin::health::{self, Health};
 use comptroller_admin::install::{self, Plan, Progress};
 use comptroller_admin::preflight::{self, Check};
@@ -20,6 +21,8 @@ pub enum Screen {
     Preflight,
     Install,
     Uninstall,
+    Settings,
+    Users,
 }
 
 impl Screen {
@@ -30,6 +33,8 @@ impl Screen {
             Screen::Preflight => "Preflight test",
             Screen::Install => "Install",
             Screen::Uninstall => "Uninstall",
+            Screen::Settings => "Settings",
+            Screen::Users => "Users",
         }
     }
 }
@@ -67,8 +72,8 @@ pub const SECTIONS: [(&str, &[MenuItem]); 5] = [
         MenuItem { key: 'a', title: "Archives", action: Action::Later(10) },
     ]),
     ("CONFIGURE", &[
-        MenuItem { key: 'c', title: "Settings", action: Action::Later(6) },
-        MenuItem { key: 'v', title: "Users", action: Action::Later(6) },
+        MenuItem { key: 'c', title: "Settings", action: Action::Open(Screen::Settings) },
+        MenuItem { key: 'v', title: "Users", action: Action::Open(Screen::Users) },
     ]),
     ("SERVICE", &[
         MenuItem { key: 'i', title: "Install", action: Action::Open(Screen::Install) },
@@ -90,6 +95,8 @@ pub struct Snapshot {
     pub db_size: Option<u64>,
     pub upstream: Option<Result<(u16, Duration), String>>,
     pub service_name: String,
+    /// Users and devices, read only while the Users screen is open. `Ok(None)`: no database yet.
+    pub users: Option<Result<Option<Directory>, String>>,
 }
 
 impl Snapshot {
@@ -137,12 +144,30 @@ impl StepsJob {
 pub enum Busy {
     Starting,
     Stopping,
+    Restarting,
+}
+
+/// A change to users and devices that asks first.
+#[derive(Clone, Debug)]
+pub enum UserChange {
+    RevokeDevice { id: i64, device: String, user: String },
+    RemoveDevice { id: i64, device: String, user: String },
+    RevokeUser { id: i64, user: String },
+    RemoveUser { id: i64, user: String },
+    CancelCode { hash: String, device: String, user: String },
 }
 
 pub enum Confirm {
     Terminate,
     Uninstall { remove_data: bool },
     Elevate(&'static str),
+    /// Leaving Settings with changes not saved.
+    Unsaved,
+    /// Before editing a setting that affects every developer.
+    Caution(usize),
+    /// Saved settings that take effect after a restart.
+    Restart(Vec<&'static str>),
+    User(UserChange),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -164,8 +189,8 @@ enum Poll {
     Now,
     /// Check now, including through the proxy to the upstream.
     WithUpstream,
-    /// Whether the Status screen is open, which is when the upstream check runs.
-    Watching(bool),
+    /// The open screen: Status gets the upstream check, Users the database read.
+    Watching(Screen),
 }
 
 pub struct Options {
@@ -197,7 +222,11 @@ pub struct App {
     preflight_results: Option<Receiver<Option<Check>>>,
     snapshots: Receiver<Snapshot>,
     refresh: Sender<Poll>,
-    watching_status: bool,
+    watching: Screen,
+    pub settings: crate::settings_screen::State,
+    pub users: crate::users_screen::State,
+    /// Settings saved that the running service only reads when it starts, and when.
+    pub restart_waiting: Option<(Vec<&'static str>, Instant)>,
 }
 
 /// How often the background checks run.
@@ -209,8 +238,9 @@ fn poll_once(
     options: &Options,
     last_upstream: &mut (Instant, Option<Result<(u16, Duration), String>>),
     force_upstream: bool,
-    watching_status: bool,
+    watching: Screen,
 ) -> Snapshot {
+    let watching_status = watching == Screen::Status;
     let default_place = || Place { config_path: options.install_dir.clone().unwrap_or_else(config::default_install_dir).join(config::CONFIG_FILE) };
     let mut service_name = options.service_name.clone().unwrap_or_else(|| config::DEFAULT_SERVICE_NAME.into());
 
@@ -258,34 +288,39 @@ fn poll_once(
         *last_upstream = (Instant::now(), Some(health::upstream_latency(&base)));
     }
 
-    Snapshot { place, config, service, health, db_size, upstream: last_upstream.1.clone(), service_name }
+    let users = match (&config, watching) {
+        (Ok(c), Screen::Users) => Some(directory::load(&place.database(c))),
+        _ => None,
+    };
+
+    Snapshot { place, config, service, health, db_size, upstream: last_upstream.1.clone(), service_name, users }
 }
 
 impl App {
     pub fn new(options: Options) -> Self {
         let install_dir = options.install_dir.clone().unwrap_or_else(config::default_install_dir);
         let mut last_upstream = (Instant::now(), None);
-        let first = poll_once(&options, &mut last_upstream, false, false);
+        let first = poll_once(&options, &mut last_upstream, false, Screen::Terminal);
 
         let (snapshot_tx, snapshots) = channel();
         let (refresh, refresh_rx) = channel::<Poll>();
         thread::spawn(move || {
             comptroller_admin::activity::mark_thread_background();
-            let mut watching_status = false;
+            let mut watching = Screen::Terminal;
             loop {
                 // Every few seconds, or straight away when asked.
                 let mut forced = false;
                 match refresh_rx.recv_timeout(Duration::from_secs(POLL_SECS)) {
                     Ok(Poll::Now) => {}
                     Ok(Poll::WithUpstream) => forced = true,
-                    Ok(Poll::Watching(status)) => {
-                        watching_status = status;
+                    Ok(Poll::Watching(screen)) => {
+                        watching = screen;
                         continue;
                     }
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                     Err(_) => return,
                 }
-                if snapshot_tx.send(poll_once(&options, &mut last_upstream, forced, watching_status)).is_err() {
+                if snapshot_tx.send(poll_once(&options, &mut last_upstream, forced, watching)).is_err() {
                     return;
                 }
             }
@@ -313,8 +348,16 @@ impl App {
             preflight_results: None,
             snapshots,
             refresh,
-            watching_status: false,
+            watching: Screen::Terminal,
+            settings: Default::default(),
+            users: Default::default(),
+            restart_waiting: None,
         }
+    }
+
+    /// Asks the background poller to check again now.
+    pub fn refresh_now(&self) {
+        let _ = self.refresh.send(Poll::Now);
     }
 
     /// Something is changing the service right now; quitting waits for it.
@@ -327,16 +370,25 @@ impl App {
     }
 
     pub fn pump(&mut self) {
-        let watching = self.screen == Screen::Status;
-        if watching != self.watching_status {
-            self.watching_status = watching;
-            let _ = self.refresh.send(Poll::Watching(watching));
-            if watching {
-                let _ = self.refresh.send(Poll::WithUpstream);
+        if self.screen != self.watching {
+            self.watching = self.screen;
+            let _ = self.refresh.send(Poll::Watching(self.screen));
+            match self.screen {
+                Screen::Status => {
+                    let _ = self.refresh.send(Poll::WithUpstream);
+                }
+                Screen::Users => self.refresh_now(),
+                _ => {}
             }
         }
         while let Ok(snapshot) = self.snapshots.try_recv() {
             self.snapshot = snapshot;
+        }
+        // The service started after the save, so it now uses those settings.
+        if let (Some((_, saved)), Some(h)) = (&self.restart_waiting, &self.snapshot.health) {
+            if h.uptime_seconds < saved.elapsed().as_secs() {
+                self.restart_waiting = None;
+            }
         }
         if self.toast.as_ref().is_some_and(|t| Instant::now() > t.until) {
             self.toast = None;
@@ -425,7 +477,7 @@ impl App {
     }
 
     /// Admin-only actions ask to reopen elevated instead of failing.
-    fn needs_admin(&mut self, what: &'static str) -> bool {
+    pub fn needs_admin(&mut self, what: &'static str) -> bool {
         if self.elevated {
             return false;
         }
@@ -443,6 +495,10 @@ impl App {
             Action::Open(Screen::Install) if self.snapshot.installed().is_some() => {
                 let dir = self.snapshot.installed().map(|s| s.exe.parent().map(|p| p.display().to_string())).flatten();
                 self.toast(ToastKind::Info, format!("Already installed in {}. Uninstall first to reinstall.", dir.unwrap_or_default()));
+            }
+            Action::Open(Screen::Settings) => {
+                self.settings.load(&self.snapshot.place.config_path);
+                self.screen = Screen::Settings;
             }
             Action::Open(screen) => self.screen = screen,
             Action::Takeoff => self.takeoff(),
@@ -497,6 +553,39 @@ impl App {
             service::stop(&name)?;
             service::wait_for(&name, State::Stopped, wait)?;
             Ok("Terminated: the service has stopped.".into())
+        });
+    }
+
+    /// Stop then start, so saved settings that are read at startup take effect.
+    pub fn restart(&mut self) {
+        if self.snapshot.console() {
+            self.toast(ToastKind::Info, "The service runs in a console window: stop it with Ctrl+C and start it again.");
+            return;
+        }
+        if self.snapshot.state() != State::Running {
+            self.toast(ToastKind::Info, "The service isn't running. Takeoff starts it with the saved settings.");
+            return;
+        }
+        if self.needs_admin("Restarting the service") {
+            return;
+        }
+        let name = self.snapshot.service_name.clone();
+        // The file as saved, which may have a new admin port.
+        let config = Config::load(&self.snapshot.place.config_path).unwrap_or_else(|_| self.snapshot.config_or_default());
+        let wait = Duration::from_secs(config.proxy.shutdown_timeout_seconds as u64 + 30);
+        let port = config.proxy.admin_port;
+        self.run_busy(Busy::Restarting, move || {
+            service::stop(&name)?;
+            service::wait_for(&name, State::Stopped, wait)?;
+            service::start(&name)?;
+            service::wait_for(&name, State::Running, Duration::from_secs(30))?;
+            for _ in 0..20 {
+                if health::fetch(port).is_some() {
+                    return Ok("Restarted: the service uses the saved settings.".into());
+                }
+                thread::sleep(Duration::from_millis(500));
+            }
+            Err(format!("The service restarted but /health doesn't answer on port {port}. Check Status and the log folder."))
         });
     }
 
@@ -561,10 +650,44 @@ impl App {
                         Err(e) => self.toast(ToastKind::Warn, e),
                     }
                 }
+                (Confirm::Unsaved, KeyCode::Char('s')) => {
+                    self.confirm = None;
+                    crate::settings_screen::save(self);
+                    if self.settings.pending.is_empty() && self.confirm.is_none() {
+                        self.screen = Screen::Terminal;
+                    }
+                }
+                (Confirm::Unsaved, KeyCode::Char('d')) => {
+                    self.confirm = None;
+                    self.settings.pending.clear();
+                    self.screen = Screen::Terminal;
+                }
+                (Confirm::Caution(index), KeyCode::Char('y')) => {
+                    let index = *index;
+                    self.confirm = None;
+                    self.settings.acknowledged.insert(index);
+                    crate::settings_screen::edit(self);
+                }
+                (Confirm::Restart(_), KeyCode::Char('y')) => {
+                    self.confirm = None;
+                    self.restart();
+                }
+                (Confirm::User(change), KeyCode::Char('y')) => {
+                    let change = change.clone();
+                    self.confirm = None;
+                    crate::users_screen::apply(self, change);
+                }
                 (_, KeyCode::Char('n') | KeyCode::Esc) => self.confirm = None,
                 _ => {}
             }
             return;
+        }
+
+        // Typing goes to the field being edited, not to the keys below.
+        match self.screen {
+            Screen::Settings if self.settings.editing.is_some() => return crate::settings_screen::on_key(self, key),
+            Screen::Users if self.users.typing() => return crate::users_screen::on_key(self, key),
+            _ => {}
         }
 
         if key.code == KeyCode::Char('?') {
@@ -605,6 +728,8 @@ impl App {
                 KeyCode::Char('l') => self.open_logs(),
                 _ => {}
             },
+            Screen::Settings => crate::settings_screen::on_key(self, key),
+            Screen::Users => crate::users_screen::on_key(self, key),
         }
     }
 

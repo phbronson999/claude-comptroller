@@ -49,6 +49,7 @@ pub struct Access {
 pub struct Identity {
     pub mode: String,
     pub allowed_group: String,
+    pub code_lifetime_hours: i64,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -102,7 +103,7 @@ impl Default for Access {
 
 impl Default for Identity {
     fn default() -> Self {
-        Self { mode: "windows".into(), allowed_group: "Claude Code Users".into() }
+        Self { mode: "windows".into(), allowed_group: "Claude Code Users".into(), code_lifetime_hours: 24 }
     }
 }
 

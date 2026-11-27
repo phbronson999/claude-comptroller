@@ -1,12 +1,15 @@
 //! Everything the admin terminal does that isn't drawing: reading the config, talking to
-//! Windows Service Control and the service's /health, installing, and the preflight test.
+//! Windows Service Control and the service's /health, installing, the preflight test,
+//! changing settings, and the users and devices in the database.
 
 pub mod activity;
 pub mod config;
+pub mod directory;
 pub mod health;
 pub mod install;
 pub mod preflight;
 pub mod service;
+pub mod settings;
 
 /// The database schema version this build understands. Matches the service's.
 pub const SCHEMA_VERSION: u32 = 1;

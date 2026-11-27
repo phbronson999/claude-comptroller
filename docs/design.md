@@ -94,7 +94,7 @@ The theme is used only where anyone understands it without aviation knowledge; e
 | `b` | Black box | The rolling recorded data: per-day size and requests, prune now |
 | `a` | Archives | Create from a date range (summary by default, raw optional), set the baseline, delete. Summaries include token totals by user and model, and the API-equivalent and seat cost **with the pricing table snapshot used**, so old archives stay comparable after prices change. |
 | `c` | Settings | Every configurable value |
-| `v` | Users | Users with their devices: status, last seen, requests today. Suspend or revoke a device, revoke a user. Replaces the IP-based "Developers" mockup. |
+| `v` | Users | Users with their devices: status, last seen, token expiry, and requests today (with recording, step 7). Suspend or resume a device, revoke it, or remove it so it can connect again as new; revoke, restore or remove a user; in `manual` mode, create and cancel one-time codes. An admin can lift only an admin suspension: a tray disconnect is the developer's to undo. Seat plans are assigned here once the Cost screen exists (step 8). Replaces the IP-based "Developers" mockup. |
 | `p` | Preflight test | End-to-end check, including that streaming isn't buffered |
 | `i` | Install | Write the embedded service exe, register it (delayed-auto start + crash recovery), default config, data folders. Shows each `sc.exe` equivalent. |
 | `u` | Uninstall | Stop, delete the service, optionally remove data |
