@@ -162,7 +162,7 @@ public sealed class Harness : IAsyncLifetime
         return port;
     }
 
-    private static async Task WaitFor(Func<Task<HttpResponseMessage>> probe)
+    private async Task WaitFor(Func<Task<HttpResponseMessage>> probe)
     {
         for (var i = 0; ; i++)
         {
@@ -173,6 +173,8 @@ public sealed class Harness : IAsyncLifetime
             }
             catch (HttpRequestException) when (i < 100)
             {
+                if (_processes.FirstOrDefault(p => p.HasExited) is { } dead)
+                    throw new InvalidOperationException($"{dead.StartInfo.ArgumentList[0]} exited with code {dead.ExitCode}.");
                 await Task.Delay(200);
             }
         }
