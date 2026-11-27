@@ -14,7 +14,7 @@ use ratatui::{
 };
 
 use crate::app::{menu_items, Action, App, Busy, Confirm, Screen, StepState, ToastKind, SECTIONS};
-use crate::theme;
+use crate::{logo, theme};
 use crate::widgets::{centered, keycap, ratio_bar, section, spinner};
 
 pub fn draw(f: &mut Frame, app: &App) {
@@ -196,7 +196,26 @@ fn draw_terminal(f: &mut Frame, app: &App, body: Rect) {
     debug_assert_eq!(index, menu_items().count());
     f.render_widget(Paragraph::new(lines).block(block), menu);
 
+    // The radar scope above "At a glance", when there's room for both.
+    let side = if side.width >= logo::MIN_WIDTH && side.height >= logo::ROWS + 14 {
+        let [top, rest] = Layout::vertical([Constraint::Length(logo::ROWS), Constraint::Fill(1)]).spacing(1).areas(side);
+        logo::draw(f, top, beam(app), app.tick);
+        rest
+    } else {
+        side
+    };
     draw_glance(f, app, side);
+}
+
+fn beam(app: &App) -> logo::Beam {
+    let s = &app.snapshot;
+    match s.state() {
+        _ if status(app).2 => logo::Beam::Changing,
+        _ if s.console() => logo::Beam::Sweeping,
+        State::Running => logo::Beam::Sweeping,
+        State::NotInstalled => logo::Beam::Off,
+        _ => logo::Beam::Stopped,
+    }
 }
 
 fn draw_glance(f: &mut Frame, app: &App, area: Rect) {

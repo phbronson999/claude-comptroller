@@ -7,6 +7,7 @@
 //!   --install-dir <dir>     where Install puts the service
 
 mod app;
+mod logo;
 // Copied as-is from Code Keepsake; not every color is used here.
 #[allow(dead_code)]
 mod theme;
