@@ -8,6 +8,7 @@ target/
 publish/
 
 # Runtime data
+dev/sandbox/
 data/
 logs/
 *.bak

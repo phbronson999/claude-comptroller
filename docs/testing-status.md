@@ -9,4 +9,5 @@ What has been verified against the real Anthropic API, and what hasn't.
 | Windows sign-in and device tokens | Verified (step 2) | Real API, signed in over loopback with a built-in group. A real AD group from a second computer is **untested**. |
 | VS Code with a real device token | **Untested** | Step 1 used a placeholder header. |
 | Running as a Windows Service | Verified (step 3) | Under a virtual account on a domain-joined machine, against the mock: `/health`, Windows sign-in over loopback, stop with a reply in flight, restart. Starting at boot and crash recovery are **untested**. |
+| Tray app sign-in, settings files, disconnect and reconnect | Verified (step 4) | Automated tests and by hand, in a sandbox folder against the mock upstream: popup states, tray icons, menu, Windows sign-in through WinHTTP. Writing the **real** settings files by hand: **untested**. |
 | Claude Desktop, Code tab | **Untested** | Expected to work through the `env` block in `~/.claude/settings.json`, the same file the CLI reads. Not tried yet. |

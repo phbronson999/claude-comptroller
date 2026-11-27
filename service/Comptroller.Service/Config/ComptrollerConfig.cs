@@ -3,6 +3,7 @@ namespace Comptroller.Service.Config;
 /// <summary>The shape of comptroller.json. See contracts/comptroller.sample.json.</summary>
 public sealed record ComptrollerConfig
 {
+    public GeneralConfig General { get; init; } = new();
     public ProxyConfig Proxy { get; init; } = new();
     public LoggingConfig Logging { get; init; } = new();
     public IdentityConfig Identity { get; init; } = new();
@@ -45,6 +46,12 @@ public sealed record ComptrollerConfig
     private static bool IsHttpUrl(string? value) =>
         Uri.TryCreate(value, UriKind.Absolute, out var uri)
         && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
+}
+
+public sealed record GeneralConfig
+{
+    /// <summary>Shown to developers in the tray app, if set.</summary>
+    public string OrganizationName { get; init; } = "";
 }
 
 public sealed record ProxyConfig

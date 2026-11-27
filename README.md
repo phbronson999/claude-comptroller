@@ -15,7 +15,7 @@ Early development. **Not ready to roll out to a team.**
 | Proxy to `api.anthropic.com` | Works |
 | Identity: Windows sign-in or one-time codes, device tokens, disconnect and reconnect | Works |
 | Running as a Windows Service, health endpoint | Works. There is no installer yet |
-| Tray app for developer computers | Not built |
+| Tray app for developer computers | Works. There is no installer yet |
 | Admin terminal UI, usage recording, cost view, archives | Not built |
 
 What has been tried against the real API is in [docs/testing-status.md](docs/testing-status.md).
@@ -63,6 +63,25 @@ While running, `http://127.0.0.1:8081/health` reports the version, uptime and wh
 
 Stopping waits for replies in flight, up to `Proxy.ShutdownTimeoutSeconds`.
 
+## The tray app
+
+`claude-comptroller-connect` runs on each developer computer. On first run it asks for the server address, signs in (silently with Windows, or with a one-time code), and writes two settings files:
+
+- `%USERPROFILE%\.claude\settings.json`: the `env` block, used by the CLI and the Desktop Code tab
+- VS Code's user `settings.json`: `claudeCode.environmentVariables`, used by the VS Code extension
+
+Only `ANTHROPIC_BASE_URL` and `ANTHROPIC_CUSTOM_HEADERS` are written. Everything else in those files, including comments, is kept, and the originals are backed up under `%APPDATA%\claude-comptroller\backups`. Restart VS Code once after connecting.
+
+**Disconnect** blocks Claude on that computer until you reconnect; it doesn't remove the settings, because that would send Claude Code straight to Anthropic. **Remove comptroller settings** in the right-click menu puts the original files back, so the computer talks to Anthropic directly again. Do that before uninstalling, or whenever a test server is stopped.
+
+Build and try it without touching your real settings:
+
+```powershell
+cargo run --manifest-path connect\Cargo.toml -- --settings-root dev\sandbox --server http://localhost:8080
+```
+
+`--device-name <name>` registers the same computer as another device. Tests: `cargo test --manifest-path connect/Cargo.toml`, after building the service.
+
 ## Configuration
 
 One file, `comptroller.json`. Start from [contracts/comptroller.sample.json](contracts/comptroller.sample.json) and pass it with `--config <path>`. Changes apply while running, except the listen URL, admin port, shutdown timeout, data folder and logging. An invalid file is ignored and the last good one stays in use.
@@ -82,6 +101,7 @@ One file, `comptroller.json`. Start from [contracts/comptroller.sample.json](con
 | `Identity.CodeLifetimeHours` | 24 | How long a one-time code works (1–168) |
 | `Identity.TokenHeaderName` | `X-Comptroller-Token` | |
 | `Data.Folder` | `data` | Database folder, relative to the config file |
+| `General.OrganizationName` | empty | Shown in the tray app |
 | `Logging.Folder` · `Level` · `RetainedFiles` · `FileSizeLimitMb` | `logs` · `Information` · 14 · 20 | |
 
 In `manual` mode, create a code for a user and device with:

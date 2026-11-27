@@ -1,4 +1,7 @@
 {
+  "General": {
+    "OrganizationName": ""
+  },
   "Proxy": {
     "ListenUrl": "http://localhost:8080",
     "AdminPort": 8081,

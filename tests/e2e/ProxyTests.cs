@@ -66,6 +66,16 @@ public sealed class ProxyTests(Harness harness) : IClassFixture<Harness>
     }
 
     [Fact]
+    public async Task Info_tells_a_client_how_to_sign_in_without_a_token()
+    {
+        var info = await Harness.Json(await harness.Send(HttpMethod.Get, "/_comptroller/info"));
+
+        Assert.Equal("manual", info.GetProperty("mode").GetString());
+        Assert.Equal(Harness.TokenHeader, info.GetProperty("tokenHeader").GetString());
+        Assert.Equal(System.Text.Json.JsonValueKind.Null, info.GetProperty("allowedGroup").ValueKind);
+    }
+
+    [Fact]
     public async Task Own_paths_are_never_forwarded()
     {
         await harness.Upstream.DeleteAsync("/_mock/requests");

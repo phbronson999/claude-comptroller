@@ -34,6 +34,8 @@ try {
     Write-Host '  $env:ANTHROPIC_CUSTOM_HEADERS = "X-Comptroller-Token: $($s.token)"'
     Write-Host '  claude'
     Write-Host 'Health: http://127.0.0.1:8081/health'
+    Write-Host 'Tray app in sandbox mode (writes settings under dev\sandbox, never your real ones):'
+    Write-Host "  cargo run --manifest-path connect\Cargo.toml -- --settings-root $root\dev\sandbox --server http://localhost:8080"
     Write-Host 'Ctrl+C stops everything.'
     Write-Host ''
 
