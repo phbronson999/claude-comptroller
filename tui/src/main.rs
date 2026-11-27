@@ -7,6 +7,7 @@
 //!   --install-dir <dir>     where Install puts the service
 
 mod app;
+mod archives_screen;
 mod black_box_screen;
 mod cost_screen;
 mod dashboard_screen;
@@ -89,7 +90,7 @@ mod tests {
         });
         for (width, height) in [(200, 50), (80, 24), (40, 12)] {
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-            for screen in [Screen::Terminal, Screen::Status, Screen::Preflight, Screen::Install, Screen::Uninstall, Screen::Settings, Screen::Users, Screen::Radar, Screen::Dashboard, Screen::Cost, Screen::BlackBox] {
+            for screen in [Screen::Terminal, Screen::Status, Screen::Preflight, Screen::Install, Screen::Uninstall, Screen::Settings, Screen::Users, Screen::Radar, Screen::Dashboard, Screen::Cost, Screen::BlackBox, Screen::Archives] {
                 app.screen = screen;
                 terminal.draw(|f| super::ui::draw(f, &app)).unwrap();
                 for key in [KeyCode::Char('?'), KeyCode::Esc] {
@@ -98,7 +99,7 @@ mod tests {
                 }
             }
             app.screen = Screen::Terminal;
-            for key in [KeyCode::Down, KeyCode::Down, KeyCode::Char('a'), KeyCode::Char('o'), KeyCode::Char('t'), KeyCode::Char('o'), KeyCode::Char('u')] {
+            for key in [KeyCode::Down, KeyCode::Down, KeyCode::Char('o'), KeyCode::Char('t'), KeyCode::Char('o'), KeyCode::Char('u')] {
                 app.on_key(KeyEvent::from(key));
                 terminal.draw(|f| super::ui::draw(f, &app)).unwrap();
             }

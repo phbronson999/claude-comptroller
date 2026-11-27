@@ -2,6 +2,7 @@
 //! Radar, requests per hour or per day, each person's share with their plan-limit hits and
 //! latency, and the latest requests. p steps through today, 7 and 14 days; r opens Radar.
 
+use comptroller_admin::archive::{weekday, weekday_name, Archive};
 use comptroller_admin::traffic::Summary;
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
@@ -41,6 +42,13 @@ pub fn on_key(app: &mut App, key: KeyEvent) {
     if app.params.days != days {
         app.params.days = days;
         app.send_params();
+    }
+}
+
+fn baseline(app: &App) -> Option<&Archive> {
+    match &app.snapshot.baseline {
+        Some(Ok(b)) => Some(b),
+        _ => None,
     }
 }
 
@@ -141,7 +149,24 @@ fn draw_tower(f: &mut Frame, app: &App, area: Rect, people: &[String]) {
 
     let [chart, recent] = Layout::vertical([Constraint::Percentage(60), Constraint::Fill(1)]).spacing(1).areas(inner);
     let per = if s.days == 1 { "HOUR" } else { "DAY" };
-    let (now_label, before_label) = if s.days == 1 { ("today".to_string(), "yesterday".to_string()) } else { (format!("last {} days", s.days), format!("the {} before", s.days)) };
+    let today = (comptroller_admin::health::now() + comptroller_admin::local_offset()).div_euclid(86_400);
+    let first_day = today - s.days as i64 + 1;
+    // With a baseline, the comparison is its average for the same weekday (in tenths, so
+    // averages under one still show); without, the period before.
+    let base = baseline(app);
+    let scale = if base.is_some() { 10 } else { 1 };
+    let comparison: Vec<i64> = match base {
+        Some(b) if s.days == 1 => b.traffic.hourly(weekday(today)).iter().map(|n| (n * 10.0).round() as i64).collect(),
+        Some(b) => (0..s.buckets.len() as i64).map(|i| (b.traffic.daily(weekday(first_day + i)) * 10.0).round() as i64).collect(),
+        None => s.previous.clone(),
+    };
+    let now_label = if s.days == 1 { "today".to_string() } else { format!("last {} days", s.days) };
+    let before_label = match base {
+        Some(b) if s.days == 1 => format!("{}, average {}", truncate(&b.title(), 18), weekday_name(today)),
+        Some(b) => format!("{}, same weekday", truncate(&b.title(), 18)),
+        None if s.days == 1 => "yesterday".to_string(),
+        None => format!("the {} before", s.days),
+    };
     let legend = format!("■ {now_label}  ■ {before_label}");
     let mut heading = section(&format!("REQUESTS / {per}"), None, width.saturating_sub(legend.chars().count() + 1));
     heading.spans.push(Span::styled("■ ", theme::fg(theme::ACCENT)));
@@ -153,7 +178,7 @@ fn draw_tower(f: &mut Frame, app: &App, area: Rect, people: &[String]) {
     // For one day: the hours with traffic today or yesterday, and the hour now.
     let range = if s.days == 1 {
         let now_hour = ((comptroller_admin::health::now() + comptroller_admin::local_offset()).rem_euclid(86_400) / 3600) as usize;
-        let busy = |i: usize| s.buckets[i].1 > 0 || s.previous.get(i).is_some_and(|&n| n > 0);
+        let busy = |i: usize| s.buckets[i].1 > 0 || comparison.get(i).is_some_and(|&n| n > 0);
         let first = (0..24).find(|&i| busy(i)).unwrap_or(now_hour).min(now_hour);
         let last = (0..24).rev().find(|&i| busy(i)).unwrap_or(now_hour).max(now_hour);
         first..last + 1
@@ -161,10 +186,10 @@ fn draw_tower(f: &mut Frame, app: &App, area: Rect, people: &[String]) {
         0..s.buckets.len()
     };
     let values = &s.buckets[range.clone()];
-    let previous = s.previous.get(range).unwrap_or_default();
+    let previous = comparison.get(range).unwrap_or_default();
     let bar = (width / values.len().max(1)).saturating_sub(2).clamp(1, 4);
     let height = (chart.height as usize).saturating_sub(3).max(1);
-    let counts: Vec<i64> = values.iter().map(|v| v.1).collect();
+    let counts: Vec<i64> = values.iter().map(|v| v.1 * scale).collect();
     lines.extend(bars(&counts, previous, height, bar));
     let labels: String = values
         .iter()
@@ -200,6 +225,54 @@ fn draw_tower(f: &mut Frame, app: &App, area: Rect, people: &[String]) {
         lines.push(Line::from(Span::styled("Nothing recorded yet.", theme::faint())));
     }
     f.render_widget(Paragraph::new(lines), recent);
+}
+
+/// The period against the baseline: today so far against the baseline's average for this
+/// weekday up to this hour, or a day's average against the baseline's.
+fn draw_baseline(lines: &mut Vec<Line<'static>>, app: &App, s: &Summary, width: usize) {
+    let b = match &app.snapshot.baseline {
+        None => {
+            lines.push(section("BASELINE", None, width));
+            lines.push(Line::from(Span::styled("None yet. On Archives (a on the Terminal), save a typical week and press b: the chart then compares with it.", theme::faint())));
+            return;
+        }
+        Some(Err(e)) => {
+            lines.push(section("BASELINE", None, width));
+            lines.push(Line::from(Span::styled(format!("Can't be read: {e}"), theme::fg(theme::ORANGE))));
+            return;
+        }
+        Some(Ok(b)) => b,
+    };
+    let t = &b.traffic;
+    let now = comptroller_admin::health::now() + comptroller_admin::local_offset();
+    let today = now.div_euclid(86_400);
+    let (requests_now, requests_base, what) = if s.days == 1 {
+        // Up to the hour now, so the morning isn't compared with a whole day.
+        let hour = (now.rem_euclid(86_400) / 3600) as usize;
+        let base: f64 = t.hourly(weekday(today))[..=hour].iter().sum();
+        (s.requests as f64, base, format!("so far vs an average {}", weekday_name(today)))
+    } else {
+        (s.requests as f64 / s.days as f64, t.per_day(), "a day".to_string())
+    };
+    lines.push(section("BASELINE", Some(truncate(&b.title(), 24)), width));
+    let row = |k: &str, now: String, before: String, delta: Span<'static>| {
+        Line::from(vec![
+            Span::styled(format!("{k:<10}"), theme::faint()),
+            Span::styled(format!("{now:>9}"), theme::text()),
+            Span::styled(format!("  vs {before:<9}"), theme::faint()),
+            delta,
+        ])
+    };
+    let change = crate::archives_screen::change;
+    lines.push(row("Requests", format!("{requests_now:.0}"), format!("{requests_base:.0}"), change(requests_now, requests_base)));
+    let ms = |v: Option<i64>| v.map(seconds).unwrap_or_else(|| "—".into());
+    lines.push(row("p95", ms(s.p95_ms), ms(t.p95_ms), change(s.p95_ms.unwrap_or(0) as f64, t.p95_ms.unwrap_or(0) as f64)));
+    let rate = s.errors as f64 * 100.0 / s.requests.max(1) as f64;
+    lines.push(row("Errors", format!("{rate:.1}%"), format!("{:.1}%", t.error_rate()), Span::raw("")));
+    let hits = s.limit_hits as f64 / s.days as f64;
+    let base_hits = t.limit_hits as f64 / t.day_count().max(1) as f64;
+    lines.push(row("429s/day", format!("{hits:.1}"), format!("{base_hits:.1}"), Span::raw("")));
+    lines.push(Line::from(Span::styled(format!("Requests {what}."), theme::faint())));
 }
 
 fn draw_people(f: &mut Frame, app: &App, area: Rect, people: &[String]) {
@@ -251,7 +324,6 @@ fn draw_people(f: &mut Frame, app: &App, area: Rect, people: &[String]) {
     lines.push(kv("max", s.max_ms, "the longest: usually a long agent turn"));
 
     lines.push(Line::default());
-    lines.push(section("BASELINE", None, width));
-    lines.push(Line::from(Span::styled("Comparisons with a baseline week arrive with Archives (build step 10).", theme::faint())));
+    draw_baseline(&mut lines, app, s, width);
     f.render_widget(Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false }).block(block), area);
 }

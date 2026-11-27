@@ -62,7 +62,7 @@ pub fn on_key(app: &mut App, key: KeyEvent) {
             app.settings.row = app.settings.rows().iter().position(|&i| SETTINGS[i].key == "RetentionDays").unwrap_or(0);
             app.screen = Screen::Settings;
         }
-        KeyCode::Char('n') => app.toast(ToastKind::Info, "Archives arrive in build step 10."),
+        KeyCode::Char('n') => crate::archives_screen::new_archive(app),
         _ => {}
     }
 }
@@ -169,7 +169,7 @@ pub fn draw(f: &mut Frame, app: &App, body: Rect) {
     lines.push(Line::default());
     lines.push(section("KEEP SOMETHING LONGER", None, width));
     lines.push(Line::from(Span::styled(
-        format!("Requests older than {retention} days are deleted each night. Archives (build step 10) will save a range first."),
+        format!("Requests older than {retention} days are deleted each night. n saves a range to an archive first; Archives (a on the Terminal) lists them."),
         theme::muted(),
     )));
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(block), right);

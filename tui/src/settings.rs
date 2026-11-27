@@ -66,7 +66,7 @@ pub const GROUPS: [(&str, Option<&str>); 10] = [
     ("Logging", None),
     ("Cost", None),
     ("Dashboard", None),
-    ("Archives", Some("step 10")),
+    ("Archives", None),
     ("TLS", Some("later")),
 ];
 
@@ -334,7 +334,44 @@ pub const SETTINGS: &[Setting] = &[
         restart: false,
         caution: None,
     },
+    Setting {
+        section: "Archives",
+        key: "Folder",
+        label: "Archive folder",
+        help: "Where archives are saved, relative to comptroller.json. The nightly prune never touches it.",
+        kind: Kind::Required,
+        default: "data\\archives",
+        restart: false,
+        caution: None,
+    },
+    Setting {
+        section: "Archives",
+        key: "DefaultContent",
+        label: "New archives keep",
+        help: "summary: figures, tokens and cost only (a few KB). raw: also a copy of every request in the range.",
+        kind: Kind::Choice(CONTENTS),
+        default: "summary",
+        restart: false,
+        caution: None,
+    },
+    Setting {
+        section: "Archives",
+        key: "Baseline",
+        label: "Baseline",
+        help: "The archive file the Dashboard and Cost compare against. Set it on the Archives screen with b; empty for none.",
+        kind: Kind::Text,
+        default: "",
+        restart: false,
+        caution: None,
+    },
 ];
+
+const CONTENTS: &[&str] = &["summary", "raw"];
+
+/// The index of a setting by its `Section.Key` path.
+pub fn index_of(path: &str) -> Option<usize> {
+    SETTINGS.iter().position(|s| s.path() == path)
+}
 
 pub fn in_group(group: &str) -> impl Iterator<Item = (usize, &'static Setting)> + '_ {
     SETTINGS.iter().enumerate().filter(move |(_, s)| s.section == group)

@@ -6,6 +6,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use comptroller_admin::archive::{self, Archive};
 use comptroller_admin::config::{self, Config, Place};
 use comptroller_admin::directory::{self, Directory};
 use comptroller_admin::health::{self, Health};
@@ -30,6 +31,7 @@ pub enum Screen {
     Dashboard,
     Cost,
     BlackBox,
+    Archives,
 }
 
 impl Screen {
@@ -56,6 +58,7 @@ impl Screen {
             Screen::Dashboard => "Dashboard",
             Screen::Cost => "Cost",
             Screen::BlackBox => "Black box",
+            Screen::Archives => "Archives",
         }
     }
 }
@@ -66,8 +69,6 @@ pub enum Action {
     Takeoff,
     Terminate,
     Uninstall,
-    /// A screen from a later build step.
-    Later(u8),
 }
 
 pub struct MenuItem {
@@ -91,7 +92,7 @@ pub const SECTIONS: [(&str, &[MenuItem]); 5] = [
     ]),
     ("DATA", &[
         MenuItem { key: 'b', title: "Black box", action: Action::Open(Screen::BlackBox) },
-        MenuItem { key: 'a', title: "Archives", action: Action::Later(10) },
+        MenuItem { key: 'a', title: "Archives", action: Action::Open(Screen::Archives) },
     ]),
     ("CONFIGURE", &[
         MenuItem { key: 'c', title: "Settings", action: Action::Open(Screen::Settings) },
@@ -129,6 +130,10 @@ pub struct Snapshot {
     pub cost: Option<CostView>,
     /// Per-day counts, read while the Black box is open. `Ok(None)`: no database yet.
     pub black_box: Option<Result<Option<comptroller_admin::blackbox::BlackBox>, String>>,
+    /// Every archive, read while the Archives screen is open.
+    pub archives: Option<Result<Vec<Archive>, String>>,
+    /// The baseline archive, read while the Dashboard or Cost is open and one is set.
+    pub baseline: Option<Result<Archive, String>>,
 }
 
 #[derive(Clone)]
@@ -146,11 +151,13 @@ pub struct Params {
     /// Dashboard: 1, 7 or 14 days.
     pub days: u32,
     pub period: Period,
+    /// Cost: an archive's report instead of the period's.
+    pub cost_archive: Option<PathBuf>,
 }
 
 impl Default for Params {
     fn default() -> Self {
-        Self { feed_user: None, errors_only: false, days: 1, period: Period::Month }
+        Self { feed_user: None, errors_only: false, days: 1, period: Period::Month, cost_archive: None }
     }
 }
 
@@ -225,6 +232,8 @@ pub enum Confirm {
     User(UserChange),
     /// Removing this many requests older than the retention, now.
     Prune(i64),
+    /// Deleting an archive file: its path and title.
+    DeleteArchive(PathBuf, String),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -289,6 +298,7 @@ pub struct App {
     pub users: crate::users_screen::State,
     pub radar: crate::radar_screen::State,
     pub cost: crate::cost_screen::State,
+    pub archives: crate::archives_screen::State,
     /// What the screens ask the poller for.
     pub params: Params,
     /// Settings saved that the running service only reads when it starts, and when.
@@ -377,10 +387,13 @@ fn poll_once(
     let cost = match (&config, &db, watching) {
         (Ok(c), Some(db), Screen::Cost) => {
             let pricing = pricing::load(&place.resolve(&c.cost.pricing_file));
-            let report = match &pricing {
-                Err(e) => Err(e.clone()),
-                Ok(_) if !db.exists() => Err("No database yet. The service creates it when it first starts.".into()),
-                Ok((table, _)) => {
+            let report = match (&pricing, &params.cost_archive) {
+                // An archive keeps its own report, priced when it was saved.
+                (_, Some(path)) => archive::open_archive(path)
+                    .and_then(|a| a.cost.ok_or_else(|| "This archive was saved without a pricing table, so it has no cost report.".to_string())),
+                (Err(e), None) => Err(e.clone()),
+                (Ok(_), None) if !db.exists() => Err("No database yet. The service creates it when it first starts.".into()),
+                (Ok((table, _)), None) => {
                     let today = (health::now() + offset).div_euclid(86_400);
                     cost::report(db, &c.cost, table, params.period, today, offset)
                 }
@@ -394,8 +407,16 @@ fn poll_once(
         (Some(db), Screen::BlackBox) => Some(comptroller_admin::blackbox::read(db, offset)),
         _ => None,
     };
+    let archives = match (&config, watching) {
+        (Ok(c), Screen::Archives) => Some(archive::list(&place.archive_dir(c))),
+        _ => None,
+    };
+    let baseline = match (&config, watching) {
+        (Ok(c), Screen::Dashboard | Screen::Cost) => place.baseline(c).map(|path| archive::open_archive(&path)),
+        _ => None,
+    };
 
-    Snapshot { place, config, service, health, db_size, upstream: last_upstream.1.clone(), service_name, users, today, feed, summary, cost, black_box }
+    Snapshot { place, config, service, health, db_size, upstream: last_upstream.1.clone(), service_name, users, today, feed, summary, cost, black_box, archives, baseline }
 }
 
 impl App {
@@ -461,6 +482,7 @@ impl App {
             users: Default::default(),
             radar: Default::default(),
             cost: Default::default(),
+            archives: Default::default(),
             params: Params::default(),
             restart_waiting: None,
         }
@@ -608,7 +630,6 @@ impl App {
 
     fn act(&mut self, action: Action) {
         match action {
-            Action::Later(step) => self.toast(ToastKind::Info, format!("That screen arrives in build step {step}.")),
             Action::Open(Screen::Preflight) => {
                 self.screen = Screen::Preflight;
                 self.run_preflight();
@@ -797,6 +818,11 @@ impl App {
                     self.confirm = None;
                     crate::black_box_screen::prune(self);
                 }
+                (Confirm::DeleteArchive(path, _), KeyCode::Char('y')) => {
+                    let path = path.clone();
+                    self.confirm = None;
+                    crate::archives_screen::delete(self, &path);
+                }
                 (Confirm::User(change), KeyCode::Char('y')) => {
                     let change = change.clone();
                     self.confirm = None;
@@ -813,6 +839,7 @@ impl App {
             Screen::Settings if self.settings.editing.is_some() => return crate::settings_screen::on_key(self, key),
             Screen::Users if self.users.typing() => return crate::users_screen::on_key(self, key),
             Screen::Cost if self.cost.editing() => return crate::cost_screen::on_key(self, key),
+            Screen::Archives if self.archives.form.is_some() => return crate::archives_screen::on_key(self, key),
             _ => {}
         }
 
@@ -860,6 +887,7 @@ impl App {
             Screen::Dashboard => crate::dashboard_screen::on_key(self, key),
             Screen::Cost => crate::cost_screen::on_key(self, key),
             Screen::BlackBox => crate::black_box_screen::on_key(self, key),
+            Screen::Archives => crate::archives_screen::on_key(self, key),
         }
     }
 

@@ -107,8 +107,9 @@ pub fn on_key(app: &mut App, key: KeyEvent) {
         }
         _ => return,
     };
-    if app.params.period != period {
+    if app.params.period != period || app.params.cost_archive.is_some() {
         app.params.period = period;
+        app.params.cost_archive = None;
         app.send_params();
     }
 }
@@ -241,7 +242,13 @@ pub fn draw(f: &mut Frame, app: &App, body: Rect) {
     let report = view.and_then(|v| v.report.as_ref().ok());
 
     let priced = app.snapshot.config_or_default().cost.seat_plans.iter().any(|p| p.price.is_some());
-    draw_cards(f, cards, report, &symbol, app.params.period, priced);
+    let period_name = match (&app.params.cost_archive, app.params.period) {
+        (Some(_), _) => "ARCHIVE",
+        (None, Period::Month) => "THIS MONTH",
+        (None, Period::Last30Days) => "30 DAYS",
+        (None, Period::SeatYear) => "SEAT YEAR",
+    };
+    draw_cards(f, cards, report, &symbol, period_name, priced);
     draw_people(f, app, left, report, &symbol);
     draw_breakdown(f, app, right, report, &symbol);
 
@@ -250,15 +257,47 @@ pub fn draw(f: &mut Frame, app: &App, body: Rect) {
     }
 }
 
+/// Per day against the baseline archive: API-equivalent cost and tokens.
+fn draw_vs_baseline(lines: &mut Vec<Line<'static>>, app: &App, r: &Report, symbol: &str, width: usize) {
+    let Some(baseline) = &app.snapshot.baseline else { return };
+    lines.push(Line::default());
+    lines.push(section("VS BASELINE", Some("per day".into()), width));
+    let b = match baseline {
+        Ok(b) => b,
+        Err(e) => {
+            lines.push(Line::from(Span::styled(format!("The baseline can't be read: {e}"), theme::fg(theme::ORANGE))));
+            return;
+        }
+    };
+    if app.params.cost_archive.as_ref() == Some(&b.path) {
+        lines.push(Line::from(Span::styled(format!("This is the baseline, \"{}\".", b.title()), theme::faint())));
+        return;
+    }
+    let (Some(bc), Some(range)) = (&b.cost, &r.range) else {
+        lines.push(Line::from(Span::styled(format!("\"{}\" has no cost report to compare with.", b.title()), theme::faint())));
+        return;
+    };
+    let days = range.days().max(1) as f64;
+    let base_days = bc.range.as_ref().map(|r| r.days()).unwrap_or(b.days()).max(1) as f64;
+    let row = |k: &str, now: String, before: String, delta: Span<'static>| {
+        Line::from(vec![
+            Span::styled(format!("{k:<15}"), theme::muted()),
+            Span::styled(format!("{now:>10}"), theme::text()),
+            Span::styled(format!("  vs {before:<10}"), theme::faint()),
+            delta,
+        ])
+    };
+    let (api, base_api) = (r.api / days, bc.api / base_days);
+    let (tok, base_tok) = (r.tokens.total() as f64 / days, bc.tokens.total() as f64 / base_days);
+    lines.push(row("API a day", money(symbol, api), money(symbol, base_api), crate::archives_screen::change(api, base_api)));
+    lines.push(row("Tokens a day", tokens(tok as i64), tokens(base_tok as i64), crate::archives_screen::change(tok, base_tok)));
+    lines.push(Line::from(Span::styled(format!("Baseline: \"{}\", {} days, priced when it was saved.", b.title(), b.days()), theme::faint())));
+}
+
 /// `priced`: some seat plan has a price, so a missing seat total means no one is on one.
-fn draw_cards(f: &mut Frame, area: Rect, report: Option<&Report>, symbol: &str, period: Period, priced: bool) {
+fn draw_cards(f: &mut Frame, area: Rect, report: Option<&Report>, symbol: &str, period_name: &str, priced: bool) {
     let areas: [Rect; 4] = Layout::horizontal([Constraint::Fill(1); 4]).spacing(1).areas(area);
     let dash = || Span::styled("—", theme::faint());
-    let period_name = match period {
-        Period::Month => "THIS MONTH",
-        Period::Last30Days => "30 DAYS",
-        Period::SeatYear => "SEAT YEAR",
-    };
     let Some(r) = report else {
         for (i, title) in [format!("SEATS · {period_name}"), "AT API PRICES".into(), "DIFFERENCE".into(), "TOKENS".into()].iter().enumerate() {
             card(f, areas[i], title, dash(), Span::raw(""));
@@ -314,7 +353,10 @@ fn draw_people(f: &mut Frame, app: &App, area: Rect, report: Option<&Report>, sy
         f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(block), area);
         return;
     };
-    let label = r.range.as_ref().map(|r| r.label.to_uppercase()).unwrap_or_default();
+    let mut label = r.range.as_ref().map(|r| r.label.to_uppercase()).unwrap_or_default();
+    if app.params.cost_archive.is_some() {
+        label = format!("ARCHIVE · {label} · PRICED WHEN SAVED");
+    }
     lines.push(section(&label, None, width));
 
     let names: Vec<String> = {
@@ -398,6 +440,8 @@ fn draw_people(f: &mut Frame, app: &App, area: Rect, report: Option<&Report>, sy
             lines.push(Line::from(Span::styled("That's the comparison to look at before renewing.", theme::faint())));
         }
     }
+
+    draw_vs_baseline(&mut lines, app, r, symbol, width);
 
     lines.push(Line::default());
     lines.push(section("HOW TO READ IT", None, width));

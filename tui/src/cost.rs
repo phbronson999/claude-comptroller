@@ -93,7 +93,7 @@ fn short(day: i64) -> String {
 
 // ── the report ──────────────────────────────────────────────────────────────
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Range {
     /// Local days, inclusive.
     pub first_day: i64,
@@ -156,7 +156,7 @@ pub fn seat_cost(plan: &SeatPlan, from: i64, to: i64, month_start_day: u32) -> O
     Some(total)
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PersonCost {
     pub name: String,
     pub plan: Option<String>,
@@ -168,7 +168,7 @@ pub struct PersonCost {
     pub unpriced_tokens: i64,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Report {
     pub range: Option<Range>,
     pub people: Vec<PersonCost>,
@@ -197,16 +197,27 @@ impl Report {
 
 /// Builds the report for `period`, `today` being a local day number and `offset` local minus UTC.
 pub fn report(db: &Path, cost: &CostConfig, pricing: &Pricing, period: Period, today: i64, offset: i64) -> Result<Report, String> {
-    let range = range(period, today, cost)?;
+    report_for(db, cost, pricing, range(period, today, cost)?, offset)
+}
+
+/// The report for any range of local days, such as an archive's.
+pub fn report_for(db: &Path, cost: &CostConfig, pricing: &Pricing, range: Range, offset: i64) -> Result<Report, String> {
     let from_utc = format_utc(range.first_day * 86_400 - offset);
+    let to_utc = format_utc((range.last_day + 1) * 86_400 - offset);
     activity::track(
-        format!("sqlite3 \"{}\" \"SELECT user_name, model, …tokens FROM requests WHERE usage = 'parsed' AND started_utc >= '{from_utc}'\"", db.display()),
-        || build(db, cost, pricing, range.clone(), &from_utc, offset),
+        format!("sqlite3 \"{}\" \"SELECT user_name, model, …tokens FROM requests WHERE usage = 'parsed' AND started_utc >= '{from_utc}' AND started_utc < '{to_utc}'\"", db.display()),
+        || build(db, cost, pricing, range.clone(), &from_utc, &to_utc, offset),
         |r| format!("{} people · {} tokens", r.people.len(), r.tokens.total()),
     )
 }
 
-fn build(db: &Path, cost: &CostConfig, pricing: &Pricing, range: Range, from_utc: &str, offset: i64) -> Result<Report, String> {
+/// A range of local days with a label, for archives.
+pub fn custom_range(first_day: i64, last_day: i64) -> Range {
+    let label = format!("{} – {}, {}", short(first_day), short(last_day), civil(last_day).0);
+    Range { first_day, last_day, end_day: last_day, label }
+}
+
+fn build(db: &Path, cost: &CostConfig, pricing: &Pricing, range: Range, from_utc: &str, to_utc: &str, offset: i64) -> Result<Report, String> {
     let c = open(db, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let e = |e: rusqlite::Error| e.to_string();
     let mut people: BTreeMap<String, PersonCost> = BTreeMap::new();
@@ -232,11 +243,11 @@ fn build(db: &Path, cost: &CostConfig, pricing: &Pricing, range: Range, from_utc
         .prepare(
             "SELECT COALESCE(user_name, ''), COALESCE(model, ''), COALESCE(input_tokens, 0), COALESCE(output_tokens, 0),
                     COALESCE(cache_write_tokens, 0), cache_write_5m_tokens, cache_write_1h_tokens, COALESCE(cache_read_tokens, 0)
-             FROM requests WHERE usage = 'parsed' AND started_utc >= ?1",
+             FROM requests WHERE usage = 'parsed' AND started_utc >= ?1 AND started_utc < ?2",
         )
         .map_err(e)?;
     let rows = statement
-        .query_map([from_utc], |r| {
+        .query_map([from_utc, to_utc], |r| {
             let write: i64 = r.get(4)?;
             let (w5, w1): (Option<i64>, Option<i64>) = (r.get(5)?, r.get(6)?);
             // Without the split, every cache write is priced as a 5-minute one.
