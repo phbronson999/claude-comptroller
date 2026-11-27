@@ -17,8 +17,7 @@ Early development. **Not ready to roll out to a team.**
 | Running as a Windows Service, health endpoint | Works. There is no installer yet |
 | Tray app for developer computers | Works. There is no installer yet |
 | Recording each request with its token usage | Works against the fake upstream; not yet checked against the real API |
-| Admin terminal: install, start, stop, status, preflight test, settings, users, radar, dashboard, cost, black box | Works |
-| Admin terminal: archives and baseline | Not built |
+| Admin terminal: install, start, stop, status, preflight test, settings, users, radar, dashboard, cost, black box, archives and baseline | Works |
 
 What has been tried against the real API is in [docs/testing-status.md](docs/testing-status.md).
 
@@ -57,11 +56,12 @@ Run the tests with `dotnet test service/Comptroller.slnx`.
 | - | - |
 | `i` | Install: writes the service to `%ProgramFiles%\claude-comptroller`, a default `comptroller.json` (an existing one is kept), registers the service (delayed automatic start, restart on crash, virtual account `NT SERVICE\claude-comptroller`), creates the data and log folders, starts it, and runs the preflight test |
 | `t` · `x` | Takeoff (start) and Terminate (stop; requests in flight finish first) |
-| `d` | Dashboard: the same cards as Radar for today or the last 7 or 14 days (`p`), requests per hour or day against the period before, each person's share with their plan-limit hits and p95, latency, and the latest requests |
-| `4` | Cost: what each person's seat costs against what their recorded tokens would cost at API list prices, for this billing month (`m`), the last 30 days (`3`) or the seat year (`y`), with a projection to the end of the period, a breakdown by model and the token mix. `s` edits the seat plans and their prices; `v` goes to Users, where `p` puts a person on one |
+| `d` | Dashboard: the same cards as Radar for today or the last 7 or 14 days (`p`), requests per hour or day against the period before (or, once there is one, the baseline's average for the same weekday), each person's share with their plan-limit hits and p95, latency, the baseline comparison, and the latest requests |
+| `4` | Cost: what each person's seat costs against what their recorded tokens would cost at API list prices, for this billing month (`m`), the last 30 days (`3`) or the seat year (`y`), with a projection to the end of the period, a breakdown by model, the token mix, and API cost and tokens per day against the baseline. `s` edits the seat plans and their prices; `v` goes to Users, where `p` puts a person on one |
 | `r` | Radar: today's requests, slowest replies (p95), plan limits hit (429s) and errors, above a live feed of requests. Requests in flight show first. `f` picks a person, `e` shows only errors and plan limits, space pauses, enter shows one request |
 | `s` | Status: the service, the proxy and health checks, with the commands they read |
-| `b` | Black box: recorded requests per day with each day's share of the file, the oldest and newest, and when the nightly prune runs next and what the last one removed. `p` prunes now, `r` goes to the retention settings |
+| `b` | Black box: recorded requests per day with each day's share of the file, the oldest and newest, and when the nightly prune runs next and what the last one removed. `p` prunes now, `r` goes to the retention settings, `n` archives a range |
+| `a` | Archives: save a range of days to its own file in `Archives.Folder` so it outlives the prune (`n`). A summary keeps the traffic figures, requests by weekday and hour, and the cost report with the pricing table and seat plans used, so it reads the same after prices change. Raw also keeps a copy of every request. `b` makes one the baseline, `del` deletes, enter shows its cost report on Cost |
 | `p` | Preflight test: config, service, proxy, a request through to Anthropic, and that replies stream without buffering. It sends no credentials, so it uses no seat |
 | `u` | Uninstall: stops and removes the service; data, logs and config are kept unless you choose otherwise |
 | `c` | Settings: every value in `comptroller.json` with its default and limits. Changes are saved together with `s`; the old file is kept as `comptroller.json.bak`, and comments and anything else in the file are kept. Settings the service reads only at startup are marked, and saving one offers to restart the service |
@@ -136,7 +136,9 @@ One file, `comptroller.json`. The admin terminal's Settings screen edits it; by 
 | `General.OrganizationName` | empty | Shown in the tray app |
 | `Logging.Folder` · `Level` · `RetainedFiles` · `FileSizeLimitMb` | `logs` · `Information` · 14 · 20 | Level: `Verbose` to `Fatal`. Files kept 1–365, size 1–1024 MB |
 
-The admin terminal also reads `Cost` (currency symbol, the day a billing month starts, the pricing file, and the seat plans with their billing period, price and renewal date) and `Dashboard` (refresh, and when latency and errors show as a warning). The service ignores both.
+The admin terminal also reads `Cost` (currency symbol, the day a billing month starts, the pricing file, and the seat plans with their billing period, price and renewal date), `Dashboard` (refresh, and when latency and errors show as a warning) and `Archives` (the folder, default `data\archives`; whether new archives keep a `summary` or `raw` rows; and the baseline's file name). The service ignores all three; the nightly prune never touches archives.
+
+An archive is a SQLite file named for its range, such as `2026-11-16_to_2026-11-22.db`. Its `archive` table holds the label, range, figures, cost report, pricing table and seat plans as key and value; a raw archive also has a `requests` table.
 
 **API prices** come from [contracts/pricing.json](contracts/pricing.json), copied from [Anthropic's pricing page](https://platform.claude.com/docs/en/about-claude/pricing) on the date it gives; the Cost screen warns when it's over 90 days old. To change them, save a copy as `pricing.json` beside `comptroller.json`. Models are matched by family and version (`claude-opus-5-5-20261001` is Opus 5.5); tokens on a model that isn't in the table are listed, not priced.
 

@@ -23,6 +23,25 @@ pub struct Config {
     pub service: Service,
     pub cost: Cost,
     pub dashboard: Dashboard,
+    pub archives: Archives,
+}
+
+/// The admin terminal's own settings: the service ignores them.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "PascalCase", default)]
+pub struct Archives {
+    /// Relative to comptroller.json.
+    pub folder: String,
+    /// `summary` or `raw`: what a new archive keeps unless chosen otherwise.
+    pub default_content: String,
+    /// The baseline archive's file name in the folder. Empty: none.
+    pub baseline: String,
+}
+
+impl Default for Archives {
+    fn default() -> Self {
+        Self { folder: "data\\archives".into(), default_content: "summary".into(), baseline: String::new() }
+    }
 }
 
 /// The admin terminal's own settings: the service ignores them.
@@ -143,6 +162,7 @@ impl Default for Config {
             service: Service::default(),
             cost: Cost::default(),
             dashboard: Dashboard::default(),
+            archives: Archives::default(),
         }
     }
 }
@@ -225,6 +245,16 @@ impl Place {
 
     pub fn database(&self, config: &Config) -> PathBuf {
         self.data_dir(config).join("comptroller.db")
+    }
+
+    pub fn archive_dir(&self, config: &Config) -> PathBuf {
+        self.resolve(&config.archives.folder)
+    }
+
+    /// The baseline archive's file, if one is set.
+    pub fn baseline(&self, config: &Config) -> Option<PathBuf> {
+        let name = config.archives.baseline.trim();
+        (!name.is_empty()).then(|| self.archive_dir(config).join(name))
     }
 
     /// The database with its write-ahead log, which holds recent writes.

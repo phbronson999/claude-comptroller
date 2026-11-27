@@ -55,7 +55,7 @@ pub struct LongContext {
 }
 
 /// One request's tokens.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, Deserialize)]
 pub struct Tokens {
     pub input: i64,
     pub output: i64,

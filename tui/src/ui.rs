@@ -46,6 +46,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         Screen::Dashboard => crate::dashboard_screen::draw(f, app, body),
         Screen::Cost => crate::cost_screen::draw(f, app, body),
         Screen::BlackBox => crate::black_box_screen::draw(f, app, body),
+        Screen::Archives => crate::archives_screen::draw(f, app, body),
     }
     draw_footer(f, app, footer);
     draw_toast(f, app, body);
@@ -151,13 +152,19 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
 fn description(app: &App, action: Action) -> (String, bool) {
     let s = &app.snapshot;
     match action {
-        Action::Later(step) => (format!("Arrives in build step {step}"), false),
         Action::Open(Screen::Status) => ("Service, config and connection health".into(), true),
         Action::Open(Screen::Preflight) => ("Send one request end to end".into(), true),
         Action::Open(Screen::Radar) => ("Live feed of requests".into(), true),
         Action::Open(Screen::Dashboard) => ("Traffic, latency and plan limits by person".into(), true),
         Action::Open(Screen::Cost) => ("Seats compared with API prices".into(), true),
         Action::Open(Screen::BlackBox) => (format!("The last {} days of recorded traffic", s.config_or_default().data.retention_days), true),
+        Action::Open(Screen::Archives) => (
+            match s.config_or_default().archives.baseline.as_str() {
+                "" => "Save a range to keep it · no baseline yet".into(),
+                name => format!("Save a range to keep it · baseline {}", name.trim_end_matches(".db")),
+            },
+            true,
+        ),
         Action::Open(Screen::Settings) => ("Every configurable value".into(), true),
         Action::Open(Screen::Users) => ("People and the computers they connected".into(), true),
         Action::Open(Screen::Install) => match s.installed() {
@@ -669,6 +676,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             Some(Confirm::Restart(_)) => vec![("y", "restart now"), ("n", "later")],
             Some(Confirm::User(_)) => vec![("y", "yes"), ("n", "cancel")],
             Some(Confirm::Prune(_)) => vec![("y", "prune now"), ("n", "cancel")],
+            Some(Confirm::DeleteArchive(..)) => vec![("y", "delete"), ("n", "cancel")],
             _ => vec![("y", "terminate"), ("n", "cancel")],
         }
     } else {
@@ -689,6 +697,8 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
                 ("r", "Radar"),
             ],
             Screen::BlackBox => vec![("esc", "Terminal"), ("p", "prune now"), ("r", "retention"), ("n", "archive a range")],
+            Screen::Archives if app.archives.form.is_some() => vec![("tab", "next field"), ("space", "summary · raw"), ("enter", "save archive"), ("esc", "cancel")],
+            Screen::Archives => vec![("esc", "Terminal"), ("↑↓", "move"), ("n", "new"), ("b", "set baseline"), ("del", "delete"), ("enter", "open in Cost")],
             Screen::Cost if app.cost.editing() => vec![],
             Screen::Cost => vec![("esc", "Terminal"), ("m", "this month"), ("3", "30 days"), ("y", "seat year"), ("s", "seat plans"), ("v", "assign plans")],
             Screen::Radar if app.radar.details => vec![("any key", "close")],
@@ -849,10 +859,28 @@ fn draw_confirm(f: &mut Frame, app: &App, confirm: &Confirm, screen: Rect) {
                 "prune",
             )
         }
+        Confirm::DeleteArchive(path, title) => (
+            "Delete archive",
+            theme::PINK,
+            vec![
+                Line::from(Span::styled(format!("Delete the archive \"{title}\"?"), theme::text())),
+                Line::from(Span::styled(path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), theme::faint())),
+                Line::default(),
+                Line::from(Span::styled(
+                    if config.archives.baseline.eq_ignore_ascii_case(&path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()) {
+                        "It's the baseline: the Dashboard and Cost go back to comparing with the period before."
+                    } else {
+                        "The file is deleted; it can't be brought back."
+                    },
+                    theme::muted(),
+                )),
+            ],
+            "delete",
+        ),
     };
     if matches!(confirm, Confirm::Unsaved) {
         // Its keys are in the footer and the text.
-        let area = centered(screen, 86, lines.len() as u16 + 4);
+        let area = centered(screen, 86, confirm_height(&lines, 86));
         f.render_widget(Clear, area);
         f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(confirm_block(title)), area);
         return;
@@ -867,9 +895,25 @@ fn draw_confirm(f: &mut Frame, app: &App, confirm: &Confirm, screen: Rect) {
         ])
         .right_aligned(),
     );
-    let area = centered(screen, 86, lines.len() as u16 + 4);
+    let area = centered(screen, 86, confirm_height(&lines, 86));
     f.render_widget(Clear, area);
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(confirm_block(title)), area);
+}
+
+/// The height a dialog `width` wide needs for `lines` once long ones wrap, so the buttons on
+/// the last line always show. Word wrapping leaves lines short, so wrapped lines are counted
+/// against most of the width rather than all of it.
+fn confirm_height(lines: &[Line], width: u16) -> u16 {
+    // Borders, the side padding and the padding on top (see confirm_block).
+    let inner = width.saturating_sub(6).max(10) as usize;
+    let rows: usize = lines
+        .iter()
+        .map(|line| {
+            let w = line.width();
+            if w <= inner { 1 } else { w.div_ceil(inner * 4 / 5) }
+        })
+        .sum();
+    rows as u16 + 4
 }
 
 fn confirm_block(title: &str) -> Block<'static> {
