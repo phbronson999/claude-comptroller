@@ -21,7 +21,8 @@ public sealed record Device(
 /// <summary>Users, devices and one-time codes. See contracts/schema.sql.</summary>
 public sealed class IdentityStore
 {
-    public const int SchemaVersion = 1;
+    /// <summary>2 added the requests table.</summary>
+    public const int SchemaVersion = 2;
 
     private const string TimeFormat = "yyyy-MM-ddTHH:mm:ss.fffZ";
 
@@ -157,6 +158,13 @@ public sealed class IdentityStore
             {
                 using var insert = Command(connection, "INSERT INTO schema_version (version) VALUES ($v)", ("$v", SchemaVersion));
                 insert.ExecuteNonQuery();
+            }
+            else if ((long)version < SchemaVersion)
+            {
+                // Every change so far only adds tables, which the script above has just created.
+                using var update = Command(connection, "UPDATE schema_version SET version = $v", ("$v", SchemaVersion));
+                update.ExecuteNonQuery();
+                Serilog.Log.Information("Upgraded the database from schema version {Old} to {New}", version, SchemaVersion);
             }
         }
 

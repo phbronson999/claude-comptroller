@@ -15,6 +15,36 @@ pub struct Health {
     pub schema_version: u32,
     pub listen_url: String,
     pub upstream_url: String,
+    /// Missing from services older than schema version 2.
+    #[serde(default)]
+    pub in_flight: InFlight,
+    #[serde(default)]
+    pub recording: Recording,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InFlight {
+    pub count: u32,
+    pub requests: Vec<FlyingRequest>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FlyingRequest {
+    pub user: Option<String>,
+    pub device: Option<String>,
+    pub method: String,
+    pub path: String,
+    pub started_utc: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Recording {
+    pub queued: u64,
+    pub dropped: u64,
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -119,6 +149,9 @@ mod tests {
         assert!(health.config_ok());
         assert!(health.windows_service);
         assert_eq!(health.schema_version, crate::SCHEMA_VERSION);
+        assert_eq!(health.in_flight.count, 1);
+        assert_eq!(health.in_flight.requests[0].path, "/v1/messages");
+        assert_eq!(health.recording.dropped, 0);
     }
 
     #[test]

@@ -16,8 +16,9 @@ Early development. **Not ready to roll out to a team.**
 | Identity: Windows sign-in or one-time codes, device tokens, disconnect and reconnect | Works |
 | Running as a Windows Service, health endpoint | Works. There is no installer yet |
 | Tray app for developer computers | Works. There is no installer yet |
-| Admin terminal: install, start, stop, status, preflight test, settings, users | Works |
-| Admin terminal: dashboard, usage recording, cost view, archives | Not built |
+| Recording each request with its token usage | Works against the fake upstream; not yet checked against the real API |
+| Admin terminal: install, start, stop, status, preflight test, settings, users, radar | Works |
+| Admin terminal: dashboard, cost view, black box, archives | Not built |
 
 What has been tried against the real API is in [docs/testing-status.md](docs/testing-status.md).
 
@@ -26,6 +27,7 @@ What has been tried against the real API is in [docs/testing-status.md](docs/tes
 1. A developer's computer signs in to the service and receives a device token.
 2. Claude Code is pointed at the service with `ANTHROPIC_BASE_URL`, and sends the token in `X-Comptroller-Token` through `ANTHROPIC_CUSTOM_HEADERS`.
 3. The service checks the token, removes it, and forwards the request with the developer's own login untouched.
+4. When the reply has finished, the service records who sent it, when, the path, status, time taken and size, and for model replies the model and token counts. It reads those from the reply as it streams past, without holding it up. It never stores a prompt or a reply.
 
 Never set `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY` or `apiKeyHelper` on those computers: any of them switches Claude Code to API billing.
 
@@ -54,11 +56,12 @@ Run the tests with `dotnet test service/Comptroller.slnx`.
 | - | - |
 | `i` | Install: writes the service to `%ProgramFiles%\claude-comptroller`, a default `comptroller.json` (an existing one is kept), registers the service (delayed automatic start, restart on crash, virtual account `NT SERVICE\claude-comptroller`), creates the data and log folders, starts it, and runs the preflight test |
 | `t` · `x` | Takeoff (start) and Terminate (stop; requests in flight finish first) |
+| `r` | Radar: today's requests, slowest replies (p95), plan limits hit (429s) and errors, above a live feed of requests. Requests in flight show first. `f` picks a person, `e` shows only errors and plan limits, space pauses, enter shows one request |
 | `s` | Status: the service, the proxy and health checks, with the commands they read |
 | `p` | Preflight test: config, service, proxy, a request through to Anthropic, and that replies stream without buffering. It sends no credentials, so it uses no seat |
 | `u` | Uninstall: stops and removes the service; data, logs and config are kept unless you choose otherwise |
 | `c` | Settings: every value in `comptroller.json` with its default and limits. Changes are saved together with `s`; the old file is kept as `comptroller.json.bak`, and comments and anything else in the file are kept. Settings the service reads only at startup are marked, and saving one offers to restart the service |
-| `v` | Users: each person and the computers they connected, with status, last seen and token expiry. Suspend or resume a computer, revoke it, or remove it so it can connect again as new; revoke or remove a person. In `manual` mode, `n` creates a one-time code. Changes apply to the next request |
+| `v` | Users: each person and the computers they connected, with status, requests today, last seen and token expiry. Suspend or resume a computer, revoke it, or remove it so it can connect again as new; revoke or remove a person. In `manual` mode, `n` creates a one-time code. Changes apply to the next request |
 
 Installing, starting, stopping, saving settings and changing users need an administrator terminal; if it isn't one, it offers to reopen itself as administrator. Each step shows the `sc.exe`, `icacls` or `sqlite3` command that does the same by hand.
 

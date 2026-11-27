@@ -23,6 +23,8 @@ public static class Health
         var started = DateTime.UtcNow;
         var adminPort = startup.Proxy.AdminPort;
         var json = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var inFlight = app.Services.GetRequiredService<Recording.InFlight>();
+        var log = app.Services.GetRequiredService<Recording.RequestLog>();
 
         app.Use(async (context, next) =>
         {
@@ -55,6 +57,19 @@ public static class Health
                 schemaVersion = IdentityStore.SchemaVersion,
                 listenUrl = startup.Proxy.ListenUrl,
                 upstreamUrl = store.CurrentValue.Proxy.UpstreamUrl,
+                inFlight = new
+                {
+                    count = inFlight.Count,
+                    requests = inFlight.Oldest(50).Select(r => new
+                    {
+                        user = r.User,
+                        device = r.Device,
+                        method = r.Method,
+                        path = r.Path,
+                        startedUtc = IdentityStore.Format(r.StartedUtc),
+                    }),
+                },
+                recording = new { queued = log.Queued, dropped = log.Dropped, error = log.LastError },
             }, json);
         });
     }

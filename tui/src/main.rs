@@ -8,6 +8,7 @@
 
 mod app;
 mod logo;
+mod radar_screen;
 mod settings_screen;
 // Copied as-is from Code Keepsake; not every color is used here.
 #[allow(dead_code)]
@@ -85,7 +86,7 @@ mod tests {
         });
         for (width, height) in [(200, 50), (80, 24), (40, 12)] {
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-            for screen in [Screen::Terminal, Screen::Status, Screen::Preflight, Screen::Install, Screen::Uninstall, Screen::Settings, Screen::Users] {
+            for screen in [Screen::Terminal, Screen::Status, Screen::Preflight, Screen::Install, Screen::Uninstall, Screen::Settings, Screen::Users, Screen::Radar] {
                 app.screen = screen;
                 terminal.draw(|f| super::ui::draw(f, &app)).unwrap();
                 for key in [KeyCode::Char('?'), KeyCode::Esc] {

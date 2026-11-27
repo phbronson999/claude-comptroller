@@ -12,6 +12,7 @@ use comptroller_admin::health::{self, Health};
 use comptroller_admin::install::{self, Plan, Progress};
 use comptroller_admin::preflight::{self, Check};
 use comptroller_admin::service::{self, Installed, State};
+use comptroller_admin::traffic::{self, Request, Today};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,9 +24,15 @@ pub enum Screen {
     Uninstall,
     Settings,
     Users,
+    Radar,
 }
 
 impl Screen {
+    /// Screens that show today's figures, so the poller reads them while one is open.
+    fn shows_today(self) -> bool {
+        matches!(self, Screen::Terminal | Screen::Radar | Screen::Users | Screen::Status)
+    }
+
     pub fn title(self) -> &'static str {
         match self {
             Screen::Terminal => "Terminal",
@@ -35,6 +42,7 @@ impl Screen {
             Screen::Uninstall => "Uninstall",
             Screen::Settings => "Settings",
             Screen::Users => "Users",
+            Screen::Radar => "Radar",
         }
     }
 }
@@ -58,7 +66,7 @@ pub struct MenuItem {
 pub const SECTIONS: [(&str, &[MenuItem]); 5] = [
     ("WATCH", &[
         MenuItem { key: 'd', title: "Dashboard", action: Action::Later(8) },
-        MenuItem { key: 'r', title: "Radar", action: Action::Later(7) },
+        MenuItem { key: 'r', title: "Radar", action: Action::Open(Screen::Radar) },
         MenuItem { key: '$', title: "Cost", action: Action::Later(8) },
         MenuItem { key: 's', title: "Status", action: Action::Open(Screen::Status) },
     ]),
@@ -97,6 +105,10 @@ pub struct Snapshot {
     pub service_name: String,
     /// Users and devices, read only while the Users screen is open. `Ok(None)`: no database yet.
     pub users: Option<Result<Option<Directory>, String>>,
+    /// Today's figures, read while a screen that shows them is open.
+    pub today: Option<Result<Option<Today>, String>>,
+    /// The newest recorded requests, read while Radar is open, with its filters.
+    pub feed: Option<Result<Option<Vec<Request>>, String>>,
 }
 
 impl Snapshot {
@@ -189,9 +201,16 @@ enum Poll {
     Now,
     /// Check now, including through the proxy to the upstream.
     WithUpstream,
-    /// The open screen: Status gets the upstream check, Users the database read.
+    /// The open screen: Status gets the upstream check, Users and Radar their database reads.
     Watching(Screen),
+    /// Radar's filters: one person, and errors only.
+    Feed(Option<String>, bool),
 }
+
+/// How many recorded requests Radar reads.
+pub const FEED_ROWS: usize = 200;
+/// How often Radar refreshes.
+pub const RADAR_SECS: u64 = 2;
 
 pub struct Options {
     pub config: Option<PathBuf>,
@@ -225,6 +244,7 @@ pub struct App {
     watching: Screen,
     pub settings: crate::settings_screen::State,
     pub users: crate::users_screen::State,
+    pub radar: crate::radar_screen::State,
     /// Settings saved that the running service only reads when it starts, and when.
     pub restart_waiting: Option<(Vec<&'static str>, Instant)>,
 }
@@ -239,6 +259,7 @@ fn poll_once(
     last_upstream: &mut (Instant, Option<Result<(u16, Duration), String>>),
     force_upstream: bool,
     watching: Screen,
+    feed_filter: &(Option<String>, bool),
 ) -> Snapshot {
     let watching_status = watching == Screen::Status;
     let default_place = || Place { config_path: options.install_dir.clone().unwrap_or_else(config::default_install_dir).join(config::CONFIG_FILE) };
@@ -288,39 +309,51 @@ fn poll_once(
         *last_upstream = (Instant::now(), Some(health::upstream_latency(&base)));
     }
 
-    let users = match (&config, watching) {
-        (Ok(c), Screen::Users) => Some(directory::load(&place.database(c))),
+    let db = config.as_ref().ok().map(|c| place.database(c));
+    let users = match (&db, watching) {
+        (Some(db), Screen::Users) => Some(directory::load(db)),
+        _ => None,
+    };
+    let today = match &db {
+        Some(db) if watching.shows_today() => Some(traffic::today(db)),
+        _ => None,
+    };
+    let feed = match (&db, watching) {
+        (Some(db), Screen::Radar) => Some(traffic::recent(db, FEED_ROWS, feed_filter.0.as_deref(), feed_filter.1)),
         _ => None,
     };
 
-    Snapshot { place, config, service, health, db_size, upstream: last_upstream.1.clone(), service_name, users }
+    Snapshot { place, config, service, health, db_size, upstream: last_upstream.1.clone(), service_name, users, today, feed }
 }
 
 impl App {
     pub fn new(options: Options) -> Self {
         let install_dir = options.install_dir.clone().unwrap_or_else(config::default_install_dir);
         let mut last_upstream = (Instant::now(), None);
-        let first = poll_once(&options, &mut last_upstream, false, Screen::Terminal);
+        let first = poll_once(&options, &mut last_upstream, false, Screen::Terminal, &(None, false));
 
         let (snapshot_tx, snapshots) = channel();
         let (refresh, refresh_rx) = channel::<Poll>();
         thread::spawn(move || {
             comptroller_admin::activity::mark_thread_background();
             let mut watching = Screen::Terminal;
+            let mut feed_filter = (None, false);
             loop {
-                // Every few seconds, or straight away when asked.
+                // Every few seconds, or straight away when asked. Radar is live, so more often.
                 let mut forced = false;
-                match refresh_rx.recv_timeout(Duration::from_secs(POLL_SECS)) {
+                let every = if watching == Screen::Radar { RADAR_SECS } else { POLL_SECS };
+                match refresh_rx.recv_timeout(Duration::from_secs(every)) {
                     Ok(Poll::Now) => {}
                     Ok(Poll::WithUpstream) => forced = true,
                     Ok(Poll::Watching(screen)) => {
                         watching = screen;
                         continue;
                     }
+                    Ok(Poll::Feed(user, errors)) => feed_filter = (user, errors),
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                     Err(_) => return,
                 }
-                if snapshot_tx.send(poll_once(&options, &mut last_upstream, forced, watching)).is_err() {
+                if snapshot_tx.send(poll_once(&options, &mut last_upstream, forced, watching, &feed_filter)).is_err() {
                     return;
                 }
             }
@@ -351,6 +384,7 @@ impl App {
             watching: Screen::Terminal,
             settings: Default::default(),
             users: Default::default(),
+            radar: Default::default(),
             restart_waiting: None,
         }
     }
@@ -358,6 +392,11 @@ impl App {
     /// Asks the background poller to check again now.
     pub fn refresh_now(&self) {
         let _ = self.refresh.send(Poll::Now);
+    }
+
+    /// Tells the poller Radar's filters, which also reads the feed again at once.
+    pub fn set_feed_filter(&self, user: Option<String>, errors_only: bool) {
+        let _ = self.refresh.send(Poll::Feed(user, errors_only));
     }
 
     /// Something is changing the service right now; quitting waits for it.
@@ -377,7 +416,7 @@ impl App {
                 Screen::Status => {
                     let _ = self.refresh.send(Poll::WithUpstream);
                 }
-                Screen::Users => self.refresh_now(),
+                screen if screen.shows_today() => self.refresh_now(),
                 _ => {}
             }
         }
@@ -730,6 +769,7 @@ impl App {
             },
             Screen::Settings => crate::settings_screen::on_key(self, key),
             Screen::Users => crate::users_screen::on_key(self, key),
+            Screen::Radar => crate::radar_screen::on_key(self, key),
         }
     }
 
