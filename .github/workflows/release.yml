@@ -24,7 +24,8 @@ jobs:
             connect
             tui
       - name: Build and test
-        shell: pwsh
+        # Windows PowerShell 5.1, as admins run build.ps1 on a stock Windows machine.
+        shell: powershell
         run: ./build.ps1 -Test
       - name: Check the tag matches the version
         shell: pwsh

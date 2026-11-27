@@ -23,7 +23,8 @@ Set-Location $root
 function Write-Step([string]$text) { Write-Host "`n== $text" -ForegroundColor Cyan }
 function Invoke-Native {
     # Runs a native command and stops the build if it fails. A plain function, so every
-    # argument (-o, -c and the like) is passed on rather than taken as its own.
+    # argument (-o, -c and the like) is passed on rather than taken as its own. Quote an
+    # argument with a colon, such as '-p:Name=value': PowerShell 7 splits it otherwise.
     # Progress on stderr (cargo's "Compiling …") isn't an error; the exit code says.
     $exe, $rest = $args
     $saved = $ErrorActionPreference
@@ -56,7 +57,7 @@ if ($Test) {
 $publish = Join-Path $root 'publish'
 Write-Step 'Service'
 Invoke-Native dotnet publish service/Comptroller.Service -c Release -r win-x64 --self-contained `
-    -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o (Join-Path $publish 'service')
+    '-p:PublishSingleFile=true' '-p:IncludeNativeLibrariesForSelfExtract=true' -o (Join-Path $publish 'service')
 
 Write-Step 'Tray app'
 Invoke-Native cargo build --release --manifest-path connect/Cargo.toml --features custom-protocol
