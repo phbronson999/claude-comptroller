@@ -35,9 +35,12 @@ Every `/_comptroller/` request must send `X-Comptroller-Client` (any value). Wit
 | `GET /_comptroller/connect?device=NAME` | Windows (+ token if the device has one) | Windows mode: issue or refresh the device token |
 | `POST /_comptroller/connect` `{"code": "XXXX-XXXX-XXXX"}` | one-time code | Manual mode: redeem a code for a token |
 | `POST /_comptroller/connect` (no body) | token | Manual mode: refresh |
+| `GET /_comptroller/info` | none | How to sign in: see below |
 | `GET /_comptroller/me` | token | Who and what this token is. Works while suspended or expired |
 | `POST /_comptroller/disconnect` | token | Suspend this device |
 | `POST /_comptroller/reconnect?device=NAME` | Windows (+ token) or, in manual mode, token | Reactivate a device the user disconnected |
+
+`GET /_comptroller/info` needs no sign-in: it tells a new client which mode the server uses.
 
 ### Session response
 
@@ -52,6 +55,14 @@ Every `/_comptroller/` request must send `X-Comptroller-Client` (any value). Wit
 Refreshing never undoes a disconnect or a suspension. In windows mode, a refresh that fails the group check expires all of that user's tokens at once.
 
 In manual mode an expired token can't be refreshed; the admin issues a new code.
+
+### `info` response
+
+```json
+{ "organizationName": "", "mode": "windows", "allowedGroup": "Claude Code Users", "tokenHeader": "X-Comptroller-Token" }
+```
+
+`allowedGroup` is null in manual mode.
 
 ### `me` response
 

@@ -36,6 +36,19 @@ public static class Endpoints
             return code is null ? ManualRefresh(context, identity, store) : RedeemCode(code, identity, store);
         }));
 
+        // What a client needs before it can sign in. No secrets, no user data.
+        group.MapGet("/info", () =>
+        {
+            var current = options.CurrentValue;
+            return Results.Json(new
+            {
+                organizationName = current.General?.OrganizationName ?? "",
+                mode = current.Identity.Mode,
+                allowedGroup = current.Identity.Mode == "windows" ? current.Identity.AllowedGroup : null,
+                tokenHeader = current.Identity.TokenHeaderName,
+            });
+        });
+
         group.MapGet("/me", (HttpContext context) =>
         {
             if (DeviceFromToken(context, options.CurrentValue.Identity, store) is not { } device)

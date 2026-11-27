@@ -2,6 +2,7 @@ name: test
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions:
@@ -10,10 +11,16 @@ permissions:
 jobs:
   e2e:
     runs-on: windows-latest
-    timeout-minutes: 10
+    # A cold Tauri build takes several minutes; the cache makes later runs quick.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 10.0.x
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: connect
       - run: dotnet test service/Comptroller.slnx
+      # The tray app's tests drive the service built by the step above.
+      - run: cargo test --manifest-path connect/Cargo.toml
