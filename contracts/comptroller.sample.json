@@ -1,0 +1,17 @@
+{
+  "Proxy": {
+    "ListenUrl": "http://localhost:8080",
+    "UpstreamUrl": "https://api.anthropic.com",
+    "ActivityTimeoutMinutes": 10,
+    "StripForwardedHeaders": true
+  },
+  "Identity": {
+    "TokenHeaderName": "X-Comptroller-Token"
+  },
+  "Logging": {
+    "Folder": "logs",
+    "Level": "Information",
+    "RetainedFiles": 14,
+    "FileSizeLimitMb": 20
+  }
+}
