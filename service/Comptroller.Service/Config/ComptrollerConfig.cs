@@ -34,6 +34,12 @@ public sealed record ComptrollerConfig
             if (Logging.FileSizeLimitMb is < 1 or > 1024) errors.Add("Logging.FileSizeLimitMb must be 1 to 1024.");
         }
         if (string.IsNullOrWhiteSpace(Data?.Folder)) errors.Add("Data.Folder must not be empty.");
+        if (Data is not null)
+        {
+            if (Data.RetentionDays is < 1 or > 365) errors.Add("Data.RetentionDays must be 1 to 365.");
+            if (!TimeOnly.TryParseExact(Data.PruneTime, "HH:mm", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out _))
+                errors.Add("Data.PruneTime must be a 24-hour time such as 02:00.");
+        }
 
         if (Identity is null) return [.. errors, "Identity section is invalid."];
         if (string.IsNullOrWhiteSpace(Identity.TokenHeaderName)) errors.Add("Identity.TokenHeaderName must not be empty.");
@@ -97,4 +103,12 @@ public sealed record AccessConfig
 public sealed record DataConfig
 {
     public string Folder { get; init; } = "data";
+
+    /// <summary>Days of requests kept: today and the days before it.</summary>
+    public int RetentionDays { get; init; } = 14;
+
+    /// <summary>Local time of the nightly prune, HH:mm.</summary>
+    public string PruneTime { get; init; } = "02:00";
+
+    public TimeOnly PruneAt => TimeOnly.ParseExact(PruneTime, "HH:mm", System.Globalization.CultureInfo.InvariantCulture);
 }

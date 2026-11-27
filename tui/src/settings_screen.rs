@@ -157,7 +157,7 @@ pub fn edit(app: &mut App) {
             s.set(index, Value::String(choices[at % choices.len()].into()));
         }
         _ => {
-            let text = settings::show(&value);
+            let text = settings::display(&SETTINGS[index], &value);
             s.editing = Some(Editor { cursor: text.chars().count(), text, error: None });
         }
     }
@@ -367,7 +367,7 @@ pub fn draw(f: &mut Frame, app: &App, body: Rect) {
             }
             let start = lines.len();
 
-            let default = format!("default {}", match settings::show(&settings::default_value(setting)) {
+            let default = format!("default {}", match settings::display(setting, &settings::default_value(setting)) {
                 d if d.is_empty() => "empty".to_string(),
                 d => d,
             });
@@ -384,7 +384,7 @@ pub fn draw(f: &mut Frame, app: &App, body: Rect) {
                     first.push(Span::styled(rest.collect::<String>(), theme::bold(theme::TEXT)));
                 }
                 _ => {
-                    let shown = settings::show(&s.value(index));
+                    let shown = settings::display(setting, &s.value(index));
                     let pending = s.pending_value(index).is_some();
                     let style = if pending { theme::fg(theme::ORANGE) } else { theme::fg(theme::ACCENT) };
                     first.push(if shown.is_empty() { Span::styled("(empty)", theme::faint()) } else { Span::styled(shown, style) });

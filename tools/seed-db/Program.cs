@@ -3,8 +3,8 @@
 //
 //   dotnet run --project tools/seed-db -- --config dev/comptroller.json [--days 21]
 //
-// The people are EXAMPLE\amy, EXAMPLE\bo, EXAMPLE\cy and EXAMPLE\dee. Running it again
-// replaces them and their requests; nothing else in the database is touched. It creates the
+// The people are EXAMPLE\maverick, EXAMPLE\goose, EXAMPLE\iceman and EXAMPLE\viper. Running it
+// again replaces everyone under EXAMPLE\ and their requests; nothing else in the database is touched. It creates the
 // database from contracts/schema.sql if there isn't one yet.
 using System.Globalization;
 using System.Text.Json;
@@ -70,10 +70,10 @@ static string Utc(DateTime time) => time.ToUniversalTime().ToString(Format, Cult
 // Who, which computers, how busy, which models they lean on, and how often they hit a limit.
 var people = new[]
 {
-    (Name: @"EXAMPLE\amy", Devices: new[] { "AMY-LAPTOP", "AMY-DESKTOP" }, PerDay: 140, Opus: 0.45, LimitRate: 0.004),
-    (Name: @"EXAMPLE\bo", Devices: new[] { "BO-LAPTOP" }, PerDay: 90, Opus: 0.2, LimitRate: 0.002),
-    (Name: @"EXAMPLE\cy", Devices: new[] { "CY-LAPTOP" }, PerDay: 35, Opus: 0.1, LimitRate: 0.0),
-    (Name: @"EXAMPLE\dee", Devices: new[] { "DEE-LAPTOP" }, PerDay: 110, Opus: 0.6, LimitRate: 0.02),
+    (Name: @"EXAMPLE\iceman", Devices: new[] { "ICEMAN-LAPTOP", "ICEMAN-DESKTOP" }, PerDay: 140, Opus: 0.45, LimitRate: 0.004),
+    (Name: @"EXAMPLE\goose", Devices: new[] { "GOOSE-LAPTOP" }, PerDay: 90, Opus: 0.2, LimitRate: 0.002),
+    (Name: @"EXAMPLE\viper", Devices: new[] { "VIPER-LAPTOP" }, PerDay: 35, Opus: 0.1, LimitRate: 0.0),
+    (Name: @"EXAMPLE\maverick", Devices: new[] { "MAVERICK-LAPTOP" }, PerDay: 110, Opus: 0.6, LimitRate: 0.02),
 };
 
 using var transaction = connection.BeginTransaction();

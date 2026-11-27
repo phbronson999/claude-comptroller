@@ -114,6 +114,9 @@ pub struct Identity {
 #[serde(rename_all = "PascalCase", default)]
 pub struct Data {
     pub folder: String,
+    pub retention_days: i64,
+    /// HH:mm, local.
+    pub prune_time: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -169,7 +172,7 @@ impl Default for Identity {
 
 impl Default for Data {
     fn default() -> Self {
-        Self { folder: "data".into() }
+        Self { folder: "data".into(), retention_days: 14, prune_time: "02:00".into() }
     }
 }
 

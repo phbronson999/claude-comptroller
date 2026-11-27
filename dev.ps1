@@ -4,7 +4,7 @@
 .PARAMETER Real
   Forward to the real api.anthropic.com instead of the mock. Uses your seat.
 .PARAMETER Seed
-  First fill the database with three weeks of traffic from four example people (EXAMPLE\amy …),
+  First fill the database with three weeks of traffic from four example people (EXAMPLE\maverick …),
   for trying the Dashboard, Radar, Cost and Users screens. Running it again replaces them.
 #>
 param([switch]$Real, [switch]$Seed)

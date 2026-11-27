@@ -104,11 +104,17 @@ Same shape as the proxy errors. 400 bad request, 401 not signed in or unknown to
       { "user": "CORP\\jdoe", "device": "LAPTOP-1", "method": "POST", "path": "/v1/messages", "startedUtc": "2026-11-30T09:12:04.512Z" }
     ]
   },
-  "recording": { "queued": 0, "dropped": 0, "error": null }
+  "recording": { "queued": 0, "dropped": 0, "error": null },
+  "retention": {
+    "days": 14,
+    "nextPruneUtc": "2026-11-28T07:00:00.000Z",
+    "lastPrune": { "finishedUtc": "2026-11-27T09:00:02.140Z", "removed": 1204, "freedBytes": 393216, "error": null }
+  }
 }
 ```
 
 - `inFlight` lists up to 50 requests being forwarded now, oldest first. `count` is all of them.
+- `retention` is the black box's: `days` kept (today and the days before it, by the server's calendar), when the nightly prune runs next, and what the last one did. `lastPrune` is null until the first, which runs a few seconds after the service starts.
 - `recording.queued` is finished requests waiting to be written to the database, `dropped` how many were never written because the database fell far behind, and `error` the last write failure, if any.
 
 - `config.status` is `error` when the file on disk was rejected. `error` says why, and the last good config stays in use.

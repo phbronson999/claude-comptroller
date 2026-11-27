@@ -375,11 +375,11 @@ mod tests {
         let today = now.div_euclid(86_400);
         c.execute_batch(&format!(
             "INSERT INTO users (name, source, created_utc, seat_plan) VALUES
-               ('amy', 'manual', '2020-01-01T00:00:00.000Z', 'Max'), ('bo', 'manual', '2020-01-01T00:00:00.000Z', NULL);
+               ('goose', 'manual', '2020-01-01T00:00:00.000Z', 'Max'), ('maverick', 'manual', '2020-01-01T00:00:00.000Z', NULL);
              INSERT INTO requests (started_utc, user_name, method, path, status, duration_ms, response_bytes, model, input_tokens, output_tokens, cache_write_tokens, cache_read_tokens, usage) VALUES
-               ('{t}', 'amy', 'POST', '/v1/messages', 200, 1, 1, 'claude-opus-5-5', 1000000, 1000000, 0, 0, 'parsed'),
-               ('{t}', 'bo', 'POST', '/v1/messages', 200, 1, 1, 'claude-mock-1', 500, 500, 0, 0, 'parsed'),
-               ('{t}', 'bo', 'POST', '/v1/messages', 429, 1, 1, NULL, NULL, NULL, NULL, NULL, NULL);",
+               ('{t}', 'goose', 'POST', '/v1/messages', 200, 1, 1, 'claude-opus-5-5', 1000000, 1000000, 0, 0, 'parsed'),
+               ('{t}', 'maverick', 'POST', '/v1/messages', 200, 1, 1, 'claude-mock-1', 500, 500, 0, 0, 'parsed'),
+               ('{t}', 'maverick', 'POST', '/v1/messages', 429, 1, 1, NULL, NULL, NULL, NULL, NULL, NULL);",
             t = format_utc(now)
         ))
         .unwrap();
@@ -392,7 +392,7 @@ mod tests {
 
         let opus = pricing.model("claude-opus-5-5").unwrap();
         assert!((report.api - (opus.rates.input + opus.rates.output)).abs() < 1e-9);
-        assert_eq!(report.people[0].name, "amy");
+        assert_eq!(report.people[0].name, "goose");
         assert!(report.people[0].seat.unwrap() > 0.0);
         assert_eq!(report.seats, 1);
         assert_eq!(report.people_without_plan, 1);

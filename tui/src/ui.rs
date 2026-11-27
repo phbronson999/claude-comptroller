@@ -45,6 +45,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         Screen::Radar => crate::radar_screen::draw(f, app, body),
         Screen::Dashboard => crate::dashboard_screen::draw(f, app, body),
         Screen::Cost => crate::cost_screen::draw(f, app, body),
+        Screen::BlackBox => crate::black_box_screen::draw(f, app, body),
     }
     draw_footer(f, app, footer);
     draw_toast(f, app, body);
@@ -156,6 +157,7 @@ fn description(app: &App, action: Action) -> (String, bool) {
         Action::Open(Screen::Radar) => ("Live feed of requests".into(), true),
         Action::Open(Screen::Dashboard) => ("Traffic, latency and plan limits by person".into(), true),
         Action::Open(Screen::Cost) => ("Seats compared with API prices".into(), true),
+        Action::Open(Screen::BlackBox) => (format!("The last {} days of recorded traffic", s.config_or_default().data.retention_days), true),
         Action::Open(Screen::Settings) => ("Every configurable value".into(), true),
         Action::Open(Screen::Users) => ("People and the computers they connected".into(), true),
         Action::Open(Screen::Install) => match s.installed() {
@@ -666,6 +668,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             Some(Confirm::Caution(_)) => vec![("y", "change it"), ("n", "cancel")],
             Some(Confirm::Restart(_)) => vec![("y", "restart now"), ("n", "later")],
             Some(Confirm::User(_)) => vec![("y", "yes"), ("n", "cancel")],
+            Some(Confirm::Prune(_)) => vec![("y", "prune now"), ("n", "cancel")],
             _ => vec![("y", "terminate"), ("n", "cancel")],
         }
     } else {
@@ -685,8 +688,9 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
                 ("7", "7 days"),
                 ("r", "Radar"),
             ],
+            Screen::BlackBox => vec![("esc", "Terminal"), ("p", "prune now"), ("r", "retention"), ("n", "archive a range")],
             Screen::Cost if app.cost.editing() => vec![],
-            Screen::Cost => vec![("esc", "Terminal"), ("m", "this month"), ("3", "30 days"), ("y", "seat year"), ("s", "seat plans")],
+            Screen::Cost => vec![("esc", "Terminal"), ("m", "this month"), ("3", "30 days"), ("y", "seat year"), ("s", "seat plans"), ("v", "assign plans")],
             Screen::Radar if app.radar.details => vec![("any key", "close")],
             Screen::Radar => vec![
                 ("esc", "Terminal"),
@@ -832,6 +836,19 @@ fn draw_confirm(f: &mut Frame, app: &App, confirm: &Confirm, screen: Rect) {
             "restart now",
         ),
         Confirm::User(change) => user_confirm(change),
+        Confirm::Prune(rows) => {
+            let days = config.data.retention_days;
+            (
+                "Prune now",
+                theme::PINK,
+                vec![
+                    Line::from(Span::styled(format!("Delete {rows} requests from before the last {days} days?"), theme::text())),
+                    Line::default(),
+                    Line::from(Span::styled("They can't be brought back. The nightly prune would delete them anyway.", theme::muted())),
+                ],
+                "prune",
+            )
+        }
     };
     if matches!(confirm, Confirm::Unsaved) {
         // Its keys are in the footer and the text.

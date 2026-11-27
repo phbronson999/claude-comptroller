@@ -60,7 +60,12 @@ People use multiple computers, so identity is **user + device**.
 - **SQLite:**
   - `data/comptroller.db`, with WAL and `auto_vacuum=INCREMENTAL`.
   - Tables: `requests`, `users`, `devices`, `schema_version`.
-  - Nightly prune at the configured time, then `PRAGMA incremental_vacuum`.
+  - Nightly prune at the configured time, then `PRAGMA incremental_vacuum`. Built in step 9:
+    - Retention N keeps today and the N−1 days before it, by the server's local calendar; the admin terminal's prune now uses the same rule.
+    - The service also prunes a few seconds after it starts, in case it was off at prune time.
+    - Rows go in batches of 5,000 so a request's row is never held up for long. Enrollment codes that expired before the cutoff go too.
+    - `/health` reports the next prune and what the last one removed and freed.
+    - Times of day are typed and shown in Windows' short time format and stored as `HH:mm`, as dates are in Windows' short date format and stored as `yyyy-mm-dd`.
 - **Config:**
   - `comptroller.json`, loaded with `IOptionsMonitor` and `reloadOnChange`. YARP reloads from the same file.
   - On an invalid file, keep the last good config and report it on `/health`.

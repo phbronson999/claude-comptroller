@@ -9,7 +9,7 @@ using Microsoft.Data.Sqlite;
 namespace Comptroller.E2E;
 
 /// <summary>A mock upstream and a service, each in its own process, on free ports with a temp config.</summary>
-public sealed class Harness : IAsyncLifetime
+public class Harness : IAsyncLifetime
 {
     public const string TokenHeader = "X-Comptroller-Token";
     /// <summary>BUILTIN\Users: every local account is in it.</summary>
@@ -31,6 +31,7 @@ public sealed class Harness : IAsyncLifetime
     {
         Directory.CreateDirectory(_folder);
         Configure();
+        BeforeStart(Path.Combine(_folder, "data", "comptroller.db"));
 
         Start("mock-anthropic", "--urls", UpstreamUrl, "--delay-ms", "100");
         Start("claude-comptroller-service", "--config", ConfigPath);
@@ -56,6 +57,19 @@ public sealed class Harness : IAsyncLifetime
         try { Directory.Delete(_folder, recursive: true); }
         catch (IOException) { /* a log file can linger briefly */ }
         return Task.CompletedTask;
+    }
+
+    /// <summary>Runs before the service starts, with where its database will be.</summary>
+    protected virtual void BeforeStart(string databasePath)
+    {
+    }
+
+    /// <summary>The repository root, found from this test's build folder.</summary>
+    public static string RepositoryRoot()
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (!File.Exists(Path.Combine(root.FullName, "dev.ps1"))) root = root.Parent!;
+        return root.FullName;
     }
 
     /// <summary>Writes the config, then lets the caller change it. The service reloads it.</summary>

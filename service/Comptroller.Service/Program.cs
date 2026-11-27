@@ -97,6 +97,9 @@ try
     builder.Services.AddSingleton(requestLog);
     builder.Services.AddHostedService(_ => requestLog);
     builder.Services.AddSingleton<InFlight>();
+    var pruner = new Pruner(databasePath, store);
+    builder.Services.AddSingleton(pruner);
+    builder.Services.AddHostedService(_ => pruner);
     builder.Services.AddAuthentication(NegotiateDefaults.AuthenticationScheme).AddNegotiate();
     builder.Services.AddAuthorization();
     builder.Services.AddSingleton<IOptionsMonitor<ComptrollerConfig>>(store);
