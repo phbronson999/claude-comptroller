@@ -3,8 +3,11 @@
   Local test environment: the mock upstream plus the service in this console.
 .PARAMETER Real
   Forward to the real api.anthropic.com instead of the mock. Uses your seat.
+.PARAMETER Seed
+  First fill the database with three weeks of traffic from four example people (EXAMPLE\amy …),
+  for trying the Dashboard, Radar, Cost and Users screens. Running it again replaces them.
 #>
-param([switch]$Real)
+param([switch]$Real, [switch]$Seed)
 
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
@@ -14,9 +17,15 @@ if (-not $dotnet) { $dotnet = "$env:ProgramFiles\dotnet\dotnet.exe" }
 $config = if ($Real) { "$root\dev\comptroller.real.json" } else { "$root\dev\comptroller.json" }
 $projects = @("$root\service\Comptroller.Service")
 if (-not $Real) { $projects += "$root\tools\mock-anthropic" }
+if ($Seed) { $projects += "$root\tools\seed-db" }
 foreach ($project in $projects) {
     & $dotnet build $project --nologo -v quiet
     if ($LASTEXITCODE -ne 0) { throw "Build failed: $project" }
+}
+
+if ($Seed) {
+    & $dotnet "$root\tools\seed-db\bin\Debug\net10.0\seed-db.dll" --config $config
+    if ($LASTEXITCODE -ne 0) { throw 'Seeding failed' }
 }
 
 $mock = $null

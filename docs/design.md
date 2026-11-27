@@ -91,7 +91,7 @@ The theme is used only where anyone understands it without aviation knowledge; e
 | | **Terminal** | The home screen. Header: `claude-comptroller · Terminal` |
 | `d` | Dashboard | Metric cards, requests per hour vs baseline, share by **user**, latency, recent requests |
 | `r` | Radar | Live feed. In-flight requests show a spinner; 4xx/5xx are pink. Filter by user. |
-| `$` | Cost | Subscription vs API pricing (see below) |
+| `4` | Cost | Subscription vs API pricing (see below). The `$` key without Shift: no key needs a modifier. |
 | `t` | Takeoff | Start the service |
 | `x` | Terminate | Stop gracefully (in-flight requests finish), after a confirm |
 | `s` | Status | Service, proxy and health checks, with the commands they use |
@@ -115,6 +115,8 @@ These keys are suggestions; finalize them so none clash.
   - **Breakdowns:** by model, and the token mix (input / output / cache write / cache read).
   - **Periods:** this month, last 30 days, **seat year to date** (from the annual renewal date), any archive range, plus the delta vs baseline.
   - **Annual seats** are paid up front. Spread their cost evenly per day across the seat year so any period gets a fair share, and label it, for example "annual billing · $X/mo effective".
+  - **Built in step 8:** seat plans live in `Cost.SeatPlans` in `comptroller.json` and are edited on the Cost screen (`s`); each person's plan is `users.seat_plan` (schema version 3), set on Users (`p`). A plan's price is spread per day over its billing month (monthly) or seat year (annual), so a whole period costs exactly the price. The pricing table is a file, not edited in Settings: Settings → Cost only names it. Models are matched by family and version parsed from the id, never by remembered ids. Cache writes without the 5 m / 1 h split are priced as 5-minute writes. Haiku 5.5's long-context tier applies to every token of a request whose prompt (input plus cache reads and writes) is over the threshold.
+  - The Dashboard's comparison bars show the previous period (yesterday, or the 7 or 14 days before), drawn behind and to the left of the current bars as in an IBCS chart, until a baseline exists (step 10).
   - The seat-year view also shows the whole year's seat cost against API-equivalent so far, plus a simple projection to renewal at the current daily rate. That's the number to look at before renewing.
   - A user added partway through the year is prorated from their start date.
   - The screen always states two caveats: it covers **Claude Code traffic only** (Chat and Cowork use the same seats but bypass the proxy), and the API figure is an **estimate at list prices** (no discounts, batch or priority tiers).

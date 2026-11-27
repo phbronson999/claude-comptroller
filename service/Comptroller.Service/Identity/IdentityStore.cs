@@ -21,8 +21,8 @@ public sealed record Device(
 /// <summary>Users, devices and one-time codes. See contracts/schema.sql.</summary>
 public sealed class IdentityStore
 {
-    /// <summary>2 added the requests table.</summary>
-    public const int SchemaVersion = 2;
+    /// <summary>2 added the requests table, 3 users.seat_plan.</summary>
+    public const int SchemaVersion = 3;
 
     private const string TimeFormat = "yyyy-MM-ddTHH:mm:ss.fffZ";
 
@@ -161,7 +161,13 @@ public sealed class IdentityStore
             }
             else if ((long)version < SchemaVersion)
             {
-                // Every change so far only adds tables, which the script above has just created.
+                // New tables come from the script above; new columns of existing tables are added here.
+                if ((long)version < 3)
+                {
+                    using var add = Command(connection, "ALTER TABLE users ADD COLUMN seat_plan TEXT");
+                    add.ExecuteNonQuery();
+                }
+
                 using var update = Command(connection, "UPDATE schema_version SET version = $v", ("$v", SchemaVersion));
                 update.ExecuteNonQuery();
                 Serilog.Log.Information("Upgraded the database from schema version {Old} to {New}", version, SchemaVersion);

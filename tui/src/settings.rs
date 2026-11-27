@@ -62,8 +62,8 @@ pub const GROUPS: [(&str, Option<&str>); 10] = [
     ("Identity", None),
     ("Data", None),
     ("Logging", None),
-    ("Cost", Some("step 8")),
-    ("Dashboard", Some("step 8")),
+    ("Cost", None),
+    ("Dashboard", None),
     ("Archives", Some("step 10")),
     ("TLS", Some("later")),
 ];
@@ -250,6 +250,66 @@ pub const SETTINGS: &[Setting] = &[
         kind: Kind::Int { min: 1, max: 1024 },
         default: "20",
         restart: true,
+        caution: None,
+    },
+    Setting {
+        section: "Cost",
+        key: "Currency",
+        label: "Currency symbol",
+        help: "Shown before amounts. API prices are in US dollars, so enter seat prices in dollars too.",
+        kind: Kind::Required,
+        default: "$",
+        restart: false,
+        caution: None,
+    },
+    Setting {
+        section: "Cost",
+        key: "MonthStartDay",
+        label: "Month starts on",
+        help: "Day of the month a billing month starts, for the Cost screen's \"this month\".",
+        kind: Kind::Int { min: 1, max: 28 },
+        default: "1",
+        restart: false,
+        caution: None,
+    },
+    Setting {
+        section: "Cost",
+        key: "PricingFile",
+        label: "Pricing table",
+        help: "API list prices per model, relative to comptroller.json. If the file is missing, the table built into this terminal is used.",
+        kind: Kind::Required,
+        default: "pricing.json",
+        restart: false,
+        caution: None,
+    },
+    Setting {
+        section: "Dashboard",
+        key: "RefreshSeconds",
+        label: "Refresh",
+        help: "Seconds between updates on the Dashboard and Radar.",
+        kind: Kind::Int { min: 1, max: 60 },
+        default: "2",
+        restart: false,
+        caution: None,
+    },
+    Setting {
+        section: "Dashboard",
+        key: "P95WarningSeconds",
+        label: "Slow warning",
+        help: "Seconds of p95 latency above which it shows orange.",
+        kind: Kind::Int { min: 1, max: 600 },
+        default: "10",
+        restart: false,
+        caution: None,
+    },
+    Setting {
+        section: "Dashboard",
+        key: "ErrorRateWarningPercent",
+        label: "Error warning",
+        help: "Percent of requests failing above which errors show pink.",
+        kind: Kind::Int { min: 1, max: 100 },
+        default: "5",
+        restart: false,
         caution: None,
     },
 ];
@@ -454,6 +514,53 @@ pub fn apply(text: &str, changes: &[(usize, Value)]) -> Result<String, String> {
     Ok(root.to_string())
 }
 
+/// The file's text with `Cost.SeatPlans` replaced, keeping everything else as it was.
+pub fn apply_plans(text: &str, plans: &[crate::config::SeatPlan]) -> Result<String, String> {
+    let text = text.trim_start_matches('\u{feff}');
+    let root = CstRootNode::parse(text, &options()).map_err(|e| format!("not valid JSON: {e}"))?;
+    let object = root.object_value().ok_or("comptroller.json isn't a JSON object")?;
+    let cost = match prop_ci(&object, "Cost") {
+        Some(prop) => prop.object_value().ok_or("\"Cost\" in comptroller.json isn't an object")?,
+        None => object.append("Cost", CstInputValue::Object(Vec::new())).object_value().expect("just added"),
+    };
+    let value = input(&serde_json::to_value(plans).map_err(|e| e.to_string())?);
+    match prop_ci(&cost, "SeatPlans") {
+        Some(prop) => prop.set_value(value),
+        None => {
+            cost.append("SeatPlans", value);
+        }
+    }
+    Ok(root.to_string())
+}
+
+/// Saves the seat plans the way [`save`] saves settings: a `.bak` first, then a whole new file.
+pub fn save_plans(path: &Path, plans: &[crate::config::SeatPlan]) -> Result<(), String> {
+    let old = std::fs::read_to_string(path).map_err(|e| format!("Can't read {}: {e}", path.display()))?;
+    let new = apply_plans(&old, plans)?;
+    crate::config::Config::parse(&serde_json::to_string(&to_value(&new)?).unwrap_or_default())?;
+    write_with_backup(path, &old, &new, format!("set Cost.SeatPlans ({} plans) in \"{}\"", plans.len(), path.display()), "seat plans saved".into())
+}
+
+fn write_with_backup(path: &Path, old: &str, new: &str, command: String, done: String) -> Result<(), String> {
+    let backup = backup_path(path);
+    activity::track(format!("copy \"{}\" \"{}\"", path.display(), backup.display()), || std::fs::write(&backup, old), |_| "backup written".into())
+        .map_err(|e| format!("Can't write the backup {}: {e}", backup.display()))?;
+    let temp = path.with_extension("json.new");
+    activity::track(
+        command,
+        || {
+            std::fs::write(&temp, new)?;
+            // Replaces the old file in one step.
+            std::fs::rename(&temp, path)
+        },
+        |_| done.clone(),
+    )
+    .map_err(|e| {
+        let _ = std::fs::remove_file(&temp);
+        format!("Can't write {}: {e}", path.display())
+    })
+}
+
 /// Saves `changes` to the file: a `.bak` of the old file first, then the new file written
 /// beside it and moved over it. Each step goes to the Commands panel.
 pub fn save(path: &Path, changes: &[(usize, Value)]) -> Result<(), String> {
@@ -467,29 +574,9 @@ pub fn save(path: &Path, changes: &[(usize, Value)]) -> Result<(), String> {
     }
     crate::config::Config::parse(&serde_json::to_string(&doc).unwrap_or_default())?;
 
-    let backup = backup_path(path);
-    activity::track(
-        format!("copy \"{}\" \"{}\"", path.display(), backup.display()),
-        || std::fs::write(&backup, &old),
-        |_| "backup written".into(),
-    )
-    .map_err(|e| format!("Can't write the backup {}: {e}", backup.display()))?;
-
     let summary: Vec<String> = changes.iter().map(|(i, v)| format!("{} = {}", SETTINGS[*i].path(), show(v))).collect();
-    let temp = path.with_extension("json.new");
-    activity::track(
-        format!("set {} in \"{}\"", summary.join(", "), path.display()),
-        || {
-            std::fs::write(&temp, &new)?;
-            // Replaces the old file in one step.
-            std::fs::rename(&temp, path)
-        },
-        |_| format!("{} saved", if changes.len() == 1 { "1 setting".to_string() } else { format!("{} settings", changes.len()) }),
-    )
-    .map_err(|e| {
-        let _ = std::fs::remove_file(&temp);
-        format!("Can't write {}: {e}", path.display())
-    })
+    let done = if changes.len() == 1 { "1 setting saved".to_string() } else { format!("{} settings saved", changes.len()) };
+    write_with_backup(path, &old, &new, format!("set {} in \"{}\"", summary.join(", "), path.display()), done)
 }
 
 #[cfg(test)]
@@ -538,6 +625,21 @@ mod tests {
         let doc = to_value(&out).unwrap();
         assert_eq!(doc["general"]["OrganizationName"], "Example", "edits the existing section whatever its case");
         assert_eq!(doc["Identity"]["TokenLifetimeDays"], 14, "adds a missing section");
+    }
+
+    #[test]
+    fn seat_plans_replace_the_list_and_keep_the_rest() {
+        use crate::config::{Config, SeatPlan};
+        let plans = vec![
+            SeatPlan { name: "Team standard".into(), billing: "annual".into(), price: Some(300.0), renewal_date: Some("2027-03-01".into()) },
+            SeatPlan { name: "Max".into(), billing: "monthly".into(), price: Some(100.0), renewal_date: None },
+        ];
+        let out = apply_plans(SAMPLE, &plans).unwrap();
+        let config = Config::parse(&serde_json::to_string(&to_value(&out).unwrap()).unwrap()).unwrap();
+        assert_eq!(config.cost.seat_plans, plans);
+        assert_eq!(config.cost.currency, "$");
+        assert_eq!(config.proxy.admin_port, 8081);
+        assert!(apply_plans("{}", &plans).unwrap().contains("SeatPlans"));
     }
 
     #[test]

@@ -205,6 +205,132 @@ fn read_today(db: &Path) -> Result<Today, String> {
     Ok(today)
 }
 
+/// One person's traffic over a Dashboard period.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PersonTraffic {
+    pub name: String,
+    pub requests: i64,
+    pub limit_hits: i64,
+    pub p95_ms: Option<i64>,
+}
+
+/// The Dashboard's figures for today, or the last 7 or 14 days.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Summary {
+    pub days: u32,
+    /// Requests per local hour (one day) or per local day: label and count, oldest first.
+    pub buckets: Vec<(String, i64)>,
+    /// The same slots one period earlier (yesterday's hours, or the days before), to compare.
+    pub previous: Vec<i64>,
+    pub people: Vec<PersonTraffic>,
+    pub requests: i64,
+    pub limit_hits: i64,
+    pub errors: i64,
+    /// Of complete /v1/messages replies.
+    pub p50_ms: Option<i64>,
+    pub p95_ms: Option<i64>,
+    pub max_ms: Option<i64>,
+}
+
+fn percentile(sorted: &[i64], p: f64) -> Option<i64> {
+    if sorted.is_empty() {
+        return None;
+    }
+    let index = ((sorted.len() as f64 * p).ceil() as usize).saturating_sub(1);
+    Some(sorted[index.min(sorted.len() - 1)])
+}
+
+/// The last `days` local days, today included. `offset` is local time minus UTC, in seconds.
+pub fn summary(db: &Path, days: u32, offset: i64) -> Result<Option<Summary>, String> {
+    if !db.exists() {
+        return Ok(None);
+    }
+    let today = (crate::health::now() + offset).div_euclid(86_400);
+    let first_day = today - days.max(1) as i64 + 1;
+    // From one period earlier, for the comparison bars.
+    let from = crate::health::format_utc((first_day - days.max(1) as i64) * 86_400 - offset);
+    activity::track(
+        format!("sqlite3 \"{}\" \"SELECT started_utc, user_name, status, duration_ms … FROM requests WHERE started_utc >= '{from}'\"", db.display()),
+        || read_summary(db, days.max(1), first_day, &from, offset),
+        |s| format!("{} requests", s.requests),
+    )
+    .map(Some)
+}
+
+fn read_summary(db: &Path, days: u32, first_day: i64, from: &str, offset: i64) -> Result<Summary, String> {
+    let c = open(db, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let e = |e: rusqlite::Error| e.to_string();
+    let mut statement = c
+        .prepare(&format!(
+            "SELECT started_utc, user_name, status, duration_ms, path = '/v1/messages' AND status = 200 AND proxy_error IS NULL, {IS_ERROR}
+             FROM requests WHERE started_utc >= ?1"
+        ))
+        .map_err(e)?;
+    let rows = statement
+        .query_map([from], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?, r.get::<_, bool>(4)?, r.get::<_, bool>(5)?))
+        })
+        .map_err(e)?;
+
+    let mut summary = Summary { days, ..Default::default() };
+    let slots = if days == 1 { 24 } else { days as usize };
+    let mut counts = vec![0i64; slots];
+    let mut previous = vec![0i64; slots];
+    let mut durations = Vec::new();
+    let mut per_person: HashMap<String, (i64, i64, Vec<i64>)> = HashMap::new();
+    for row in rows {
+        let (started, user, status, ms, complete, error) = row.map_err(e)?;
+        let local = parse_utc(&started).unwrap_or(0) + offset;
+        let day = local.div_euclid(86_400);
+        let earlier = day < first_day;
+        let slot = if days == 1 { local.rem_euclid(86_400) / 3600 } else { day - first_day + if earlier { days as i64 } else { 0 } };
+        let bucket = if earlier { &mut previous } else { &mut counts };
+        if let Some(count) = bucket.get_mut(slot.max(0) as usize) {
+            *count += 1;
+        }
+        // Everything else is about the period itself.
+        if earlier {
+            continue;
+        }
+        summary.requests += 1;
+        summary.limit_hits += i64::from(status == 429);
+        summary.errors += i64::from(error);
+        if complete {
+            durations.push(ms);
+        }
+        if let Some(user) = user {
+            let person = per_person.entry(user).or_default();
+            person.0 += 1;
+            person.1 += i64::from(status == 429);
+            if complete {
+                person.2.push(ms);
+            }
+        }
+    }
+    summary.buckets = counts
+        .into_iter()
+        .enumerate()
+        .map(|(i, n)| {
+            let label = if days == 1 { format!("{i:02}") } else { format!("{:02}", crate::cost::civil(first_day + i as i64).2) };
+            (label, n)
+        })
+        .collect();
+    summary.previous = previous;
+    durations.sort_unstable();
+    summary.p50_ms = percentile(&durations, 0.5);
+    summary.p95_ms = percentile(&durations, 0.95);
+    summary.max_ms = durations.last().copied();
+    summary.people = per_person
+        .into_iter()
+        .map(|(name, (requests, limit_hits, mut ms))| {
+            ms.sort_unstable();
+            PersonTraffic { name, requests, limit_hits, p95_ms: percentile(&ms, 0.95) }
+        })
+        .collect();
+    summary.people.sort_by(|a, b| b.requests.cmp(&a.requests).then_with(|| a.name.cmp(&b.name)));
+    Ok(summary)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -255,6 +381,28 @@ mod tests {
         assert_eq!(today.last.as_ref().map(|l| l.1.as_str()), Some("EXAMPLE\\bo"));
         assert_eq!(today.active.len(), 2);
         assert!(today.active.iter().any(|(u, _, hit)| u == "EXAMPLE\\bo" && *hit));
+    }
+
+    #[test]
+    fn a_summary_over_days() {
+        let db = database("summary");
+        let two_weeks = summary(&db, 14, 0).unwrap().unwrap();
+        assert_eq!(two_weeks.requests, 6);
+        assert_eq!(two_weeks.buckets.len(), 14);
+        assert_eq!(two_weeks.buckets.iter().map(|b| b.1).sum::<i64>(), 6);
+        assert_eq!(two_weeks.previous.iter().sum::<i64>(), 0);
+        // The request from two days ago is in the previous period of a one-day summary.
+        let one = summary(&db, 1, 0).unwrap().unwrap();
+        assert_eq!(one.previous.len(), 24);
+        let two = summary(&db, 2, 0).unwrap().unwrap();
+        assert_eq!(two.requests + two.previous.iter().sum::<i64>(), 6);
+        assert_eq!(two_weeks.limit_hits, 1);
+        assert_eq!(two_weeks.errors, 1);
+        assert_eq!(two_weeks.people[0].name, "EXAMPLE\\amy");
+        assert_eq!((two_weeks.p50_ms, two_weeks.max_ms), (Some(1000), Some(3000)));
+        let today = summary(&db, 1, 0).unwrap().unwrap();
+        assert_eq!(today.buckets.len(), 24);
+        assert!(today.requests <= 5);
     }
 
     #[test]

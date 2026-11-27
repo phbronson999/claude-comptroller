@@ -421,6 +421,10 @@ pub fn draw(f: &mut Frame, app: &App, body: Rect) {
             lines.push(Line::default());
         }
 
+        if name == "Cost" {
+            lines.push(Line::from(Span::styled("Seat plans and their prices are edited on the Cost screen (4 on the Terminal, then s).", theme::muted())));
+            lines.push(Line::default());
+        }
         let pending_restart: Vec<&str> = app.restart_waiting.iter().flat_map(|(labels, _)| labels.iter().copied()).collect();
         if !pending_restart.is_empty() {
             lines.push(Line::from(Span::styled(

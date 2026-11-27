@@ -31,5 +31,18 @@
     "Level": "Information",
     "RetainedFiles": 14,
     "FileSizeLimitMb": 20
+  },
+  "Cost": {
+    "Currency": "$",
+    "MonthStartDay": 1,
+    "PricingFile": "pricing.json",
+    "SeatPlans": [
+      { "Name": "Team standard", "Billing": "annual", "Price": null, "RenewalDate": null }
+    ]
+  },
+  "Dashboard": {
+    "RefreshSeconds": 2,
+    "P95WarningSeconds": 10,
+    "ErrorRateWarningPercent": 5
   }
 }

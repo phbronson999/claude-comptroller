@@ -13,7 +13,7 @@ public sealed class HealthTests(Harness harness) : IClassFixture<Harness>
         var health = await Health();
 
         Assert.Equal("0.1.0", health.GetProperty("version").GetString());
-        Assert.Equal(2, health.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(3, health.GetProperty("schemaVersion").GetInt32());
         Assert.Equal(0, health.GetProperty("recording").GetProperty("dropped").GetInt32());
         Assert.False(health.GetProperty("windowsService").GetBoolean());
         Assert.Equal(harness.Client.BaseAddress!.ToString().TrimEnd('/'), health.GetProperty("listenUrl").GetString());

@@ -21,6 +21,64 @@ pub struct Config {
     pub data: Data,
     pub logging: Logging,
     pub service: Service,
+    pub cost: Cost,
+    pub dashboard: Dashboard,
+}
+
+/// The admin terminal's own settings: the service ignores them.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "PascalCase", default)]
+pub struct Cost {
+    pub currency: String,
+    /// The day a "month" starts, for billing cycles that don't start on the 1st.
+    pub month_start_day: u32,
+    /// Relative to comptroller.json. Missing: the table built into this terminal.
+    pub pricing_file: String,
+    pub seat_plans: Vec<SeatPlan>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, serde::Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct SeatPlan {
+    pub name: String,
+    /// `annual` or `monthly`.
+    #[serde(default = "annual")]
+    pub billing: String,
+    /// For the billing period, in `Cost.Currency`. None: not entered yet.
+    #[serde(default)]
+    pub price: Option<f64>,
+    /// `yyyy-mm-dd`, for annual plans: any renewal date, past or next.
+    #[serde(default)]
+    pub renewal_date: Option<String>,
+}
+
+fn annual() -> String {
+    "annual".into()
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "PascalCase", default)]
+pub struct Dashboard {
+    pub refresh_seconds: u64,
+    pub p95_warning_seconds: u64,
+    pub error_rate_warning_percent: f64,
+}
+
+impl Default for Cost {
+    fn default() -> Self {
+        Self {
+            currency: "$".into(),
+            month_start_day: 1,
+            pricing_file: "pricing.json".into(),
+            seat_plans: vec![SeatPlan { name: "Team standard".into(), billing: "annual".into(), price: None, renewal_date: None }],
+        }
+    }
+}
+
+impl Default for Dashboard {
+    fn default() -> Self {
+        Self { refresh_seconds: 2, p95_warning_seconds: 10, error_rate_warning_percent: 5.0 }
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -80,6 +138,8 @@ impl Default for Config {
             data: Data::default(),
             logging: Logging::default(),
             service: Service::default(),
+            cost: Cost::default(),
+            dashboard: Dashboard::default(),
         }
     }
 }
@@ -211,6 +271,9 @@ mod tests {
         assert_eq!(config.identity.mode, "windows");
         assert_eq!(config.service.name, DEFAULT_SERVICE_NAME);
         assert!(!config.access.allowed_cidrs.is_empty());
+        assert_eq!(config.cost.seat_plans.len(), 1);
+        assert_eq!(config.cost.seat_plans[0].price, None);
+        assert_eq!(config.dashboard.refresh_seconds, 2);
     }
 
     #[test]

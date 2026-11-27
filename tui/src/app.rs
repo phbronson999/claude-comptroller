@@ -12,7 +12,9 @@ use comptroller_admin::health::{self, Health};
 use comptroller_admin::install::{self, Plan, Progress};
 use comptroller_admin::preflight::{self, Check};
 use comptroller_admin::service::{self, Installed, State};
-use comptroller_admin::traffic::{self, Request, Today};
+use comptroller_admin::cost::{self, Period, Report};
+use comptroller_admin::pricing::{self, Pricing};
+use comptroller_admin::traffic::{self, Request, Summary, Today};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,12 +27,19 @@ pub enum Screen {
     Settings,
     Users,
     Radar,
+    Dashboard,
+    Cost,
 }
 
 impl Screen {
     /// Screens that show today's figures, so the poller reads them while one is open.
     fn shows_today(self) -> bool {
         matches!(self, Screen::Terminal | Screen::Radar | Screen::Users | Screen::Status)
+    }
+
+    /// Screens that refresh at the Dashboard's rate rather than every few seconds.
+    fn live(self) -> bool {
+        matches!(self, Screen::Radar | Screen::Dashboard)
     }
 
     pub fn title(self) -> &'static str {
@@ -43,6 +52,8 @@ impl Screen {
             Screen::Settings => "Settings",
             Screen::Users => "Users",
             Screen::Radar => "Radar",
+            Screen::Dashboard => "Dashboard",
+            Screen::Cost => "Cost",
         }
     }
 }
@@ -65,9 +76,10 @@ pub struct MenuItem {
 
 pub const SECTIONS: [(&str, &[MenuItem]); 5] = [
     ("WATCH", &[
-        MenuItem { key: 'd', title: "Dashboard", action: Action::Later(8) },
+        MenuItem { key: 'd', title: "Dashboard", action: Action::Open(Screen::Dashboard) },
         MenuItem { key: 'r', title: "Radar", action: Action::Open(Screen::Radar) },
-        MenuItem { key: '$', title: "Cost", action: Action::Later(8) },
+        // 4: the $ key without Shift. No key here needs a modifier.
+        MenuItem { key: '4', title: "Cost", action: Action::Open(Screen::Cost) },
         MenuItem { key: 's', title: "Status", action: Action::Open(Screen::Status) },
     ]),
     ("CONTROL", &[
@@ -107,8 +119,35 @@ pub struct Snapshot {
     pub users: Option<Result<Option<Directory>, String>>,
     /// Today's figures, read while a screen that shows them is open.
     pub today: Option<Result<Option<Today>, String>>,
-    /// The newest recorded requests, read while Radar is open, with its filters.
+    /// The newest recorded requests, read while Radar or the Dashboard is open, with Radar's filters.
     pub feed: Option<Result<Option<Vec<Request>>, String>>,
+    /// The Dashboard's period, read while it's open.
+    pub summary: Option<Result<Option<Summary>, String>>,
+    /// The Cost screen's report and the pricing table it used, read while it's open.
+    pub cost: Option<CostView>,
+}
+
+#[derive(Clone)]
+pub struct CostView {
+    pub pricing: Result<(Pricing, pricing::Source), String>,
+    pub report: Result<Report, String>,
+}
+
+/// What the open screen asks the poller for.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Params {
+    /// Radar: one person, and errors only.
+    pub feed_user: Option<String>,
+    pub errors_only: bool,
+    /// Dashboard: 1, 7 or 14 days.
+    pub days: u32,
+    pub period: Period,
+}
+
+impl Default for Params {
+    fn default() -> Self {
+        Self { feed_user: None, errors_only: false, days: 1, period: Period::Month }
+    }
 }
 
 impl Snapshot {
@@ -203,14 +242,12 @@ enum Poll {
     WithUpstream,
     /// The open screen: Status gets the upstream check, Users and Radar their database reads.
     Watching(Screen),
-    /// Radar's filters: one person, and errors only.
-    Feed(Option<String>, bool),
+    /// The open screen's choices, which also reads again at once.
+    Params(Params),
 }
 
 /// How many recorded requests Radar reads.
 pub const FEED_ROWS: usize = 200;
-/// How often Radar refreshes.
-pub const RADAR_SECS: u64 = 2;
 
 pub struct Options {
     pub config: Option<PathBuf>,
@@ -245,6 +282,9 @@ pub struct App {
     pub settings: crate::settings_screen::State,
     pub users: crate::users_screen::State,
     pub radar: crate::radar_screen::State,
+    pub cost: crate::cost_screen::State,
+    /// What the screens ask the poller for.
+    pub params: Params,
     /// Settings saved that the running service only reads when it starts, and when.
     pub restart_waiting: Option<(Vec<&'static str>, Instant)>,
 }
@@ -259,7 +299,7 @@ fn poll_once(
     last_upstream: &mut (Instant, Option<Result<(u16, Duration), String>>),
     force_upstream: bool,
     watching: Screen,
-    feed_filter: &(Option<String>, bool),
+    params: &Params,
 ) -> Snapshot {
     let watching_status = watching == Screen::Status;
     let default_place = || Place { config_path: options.install_dir.clone().unwrap_or_else(config::default_install_dir).join(config::CONFIG_FILE) };
@@ -319,29 +359,51 @@ fn poll_once(
         _ => None,
     };
     let feed = match (&db, watching) {
-        (Some(db), Screen::Radar) => Some(traffic::recent(db, FEED_ROWS, feed_filter.0.as_deref(), feed_filter.1)),
+        (Some(db), Screen::Radar) => Some(traffic::recent(db, FEED_ROWS, params.feed_user.as_deref(), params.errors_only)),
+        (Some(db), Screen::Dashboard) => Some(traffic::recent(db, 8, None, false)),
+        _ => None,
+    };
+    let offset = comptroller_admin::local_offset();
+    let summary = match (&db, watching) {
+        (Some(db), Screen::Dashboard) => Some(traffic::summary(db, params.days, offset)),
+        _ => None,
+    };
+    let cost = match (&config, &db, watching) {
+        (Ok(c), Some(db), Screen::Cost) => {
+            let pricing = pricing::load(&place.resolve(&c.cost.pricing_file));
+            let report = match &pricing {
+                Err(e) => Err(e.clone()),
+                Ok(_) if !db.exists() => Err("No database yet. The service creates it when it first starts.".into()),
+                Ok((table, _)) => {
+                    let today = (health::now() + offset).div_euclid(86_400);
+                    cost::report(db, &c.cost, table, params.period, today, offset)
+                }
+            };
+            Some(CostView { pricing, report })
+        }
         _ => None,
     };
 
-    Snapshot { place, config, service, health, db_size, upstream: last_upstream.1.clone(), service_name, users, today, feed }
+    Snapshot { place, config, service, health, db_size, upstream: last_upstream.1.clone(), service_name, users, today, feed, summary, cost }
 }
 
 impl App {
     pub fn new(options: Options) -> Self {
         let install_dir = options.install_dir.clone().unwrap_or_else(config::default_install_dir);
         let mut last_upstream = (Instant::now(), None);
-        let first = poll_once(&options, &mut last_upstream, false, Screen::Terminal, &(None, false));
+        let first = poll_once(&options, &mut last_upstream, false, Screen::Terminal, &Params::default());
+        let mut live_secs = first.config_or_default().dashboard.refresh_seconds.clamp(1, 60);
 
         let (snapshot_tx, snapshots) = channel();
         let (refresh, refresh_rx) = channel::<Poll>();
         thread::spawn(move || {
             comptroller_admin::activity::mark_thread_background();
             let mut watching = Screen::Terminal;
-            let mut feed_filter = (None, false);
+            let mut params = Params::default();
             loop {
-                // Every few seconds, or straight away when asked. Radar is live, so more often.
+                // Every few seconds, or straight away when asked. Radar and the Dashboard are live.
                 let mut forced = false;
-                let every = if watching == Screen::Radar { RADAR_SECS } else { POLL_SECS };
+                let every = if watching.live() { live_secs } else { POLL_SECS };
                 match refresh_rx.recv_timeout(Duration::from_secs(every)) {
                     Ok(Poll::Now) => {}
                     Ok(Poll::WithUpstream) => forced = true,
@@ -349,11 +411,13 @@ impl App {
                         watching = screen;
                         continue;
                     }
-                    Ok(Poll::Feed(user, errors)) => feed_filter = (user, errors),
+                    Ok(Poll::Params(p)) => params = p,
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                     Err(_) => return,
                 }
-                if snapshot_tx.send(poll_once(&options, &mut last_upstream, forced, watching, &feed_filter)).is_err() {
+                let snapshot = poll_once(&options, &mut last_upstream, forced, watching, &params);
+                live_secs = snapshot.config_or_default().dashboard.refresh_seconds.clamp(1, 60);
+                if snapshot_tx.send(snapshot).is_err() {
                     return;
                 }
             }
@@ -385,6 +449,8 @@ impl App {
             settings: Default::default(),
             users: Default::default(),
             radar: Default::default(),
+            cost: Default::default(),
+            params: Params::default(),
             restart_waiting: None,
         }
     }
@@ -394,9 +460,14 @@ impl App {
         let _ = self.refresh.send(Poll::Now);
     }
 
-    /// Tells the poller Radar's filters, which also reads the feed again at once.
-    pub fn set_feed_filter(&self, user: Option<String>, errors_only: bool) {
-        let _ = self.refresh.send(Poll::Feed(user, errors_only));
+    /// Tells the poller what the screens ask for, which also reads again at once.
+    pub fn send_params(&self) {
+        let _ = self.refresh.send(Poll::Params(self.params.clone()));
+    }
+
+    /// Seconds between updates on Radar and the Dashboard.
+    pub fn live_secs(&self) -> u64 {
+        self.snapshot.config_or_default().dashboard.refresh_seconds.clamp(1, 60)
     }
 
     /// Something is changing the service right now; quitting waits for it.
@@ -726,6 +797,7 @@ impl App {
         match self.screen {
             Screen::Settings if self.settings.editing.is_some() => return crate::settings_screen::on_key(self, key),
             Screen::Users if self.users.typing() => return crate::users_screen::on_key(self, key),
+            Screen::Cost if self.cost.editing() => return crate::cost_screen::on_key(self, key),
             _ => {}
         }
 
@@ -770,6 +842,8 @@ impl App {
             Screen::Settings => crate::settings_screen::on_key(self, key),
             Screen::Users => crate::users_screen::on_key(self, key),
             Screen::Radar => crate::radar_screen::on_key(self, key),
+            Screen::Dashboard => crate::dashboard_screen::on_key(self, key),
+            Screen::Cost => crate::cost_screen::on_key(self, key),
         }
     }
 
