@@ -76,6 +76,21 @@ public sealed class ProxyTests(Harness harness) : IClassFixture<Harness>
     }
 
     [Fact]
+    public async Task The_preflight_stream_arrives_in_pieces()
+    {
+        var clock = Stopwatch.StartNew();
+        using var response = await harness.Send(HttpMethod.Get, "/_comptroller/preflight/stream", completion: HttpCompletionOption.ResponseHeadersRead);
+        using var reader = new StreamReader(await response.Content.ReadAsStreamAsync());
+
+        Assert.Equal("event: ping", await reader.ReadLineAsync());
+        var first = clock.Elapsed;
+        var rest = await reader.ReadToEndAsync();
+
+        Assert.Equal(4, rest.Split("event: ping").Length - 1);
+        Assert.True(clock.Elapsed - first > TimeSpan.FromMilliseconds(600), $"first {first}, last {clock.Elapsed}");
+    }
+
+    [Fact]
     public async Task Own_paths_are_never_forwarded()
     {
         await harness.Upstream.DeleteAsync("/_mock/requests");

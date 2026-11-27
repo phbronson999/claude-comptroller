@@ -16,7 +16,8 @@ Early development. **Not ready to roll out to a team.**
 | Identity: Windows sign-in or one-time codes, device tokens, disconnect and reconnect | Works |
 | Running as a Windows Service, health endpoint | Works. There is no installer yet |
 | Tray app for developer computers | Works. There is no installer yet |
-| Admin terminal UI, usage recording, cost view, archives | Not built |
+| Admin terminal: install, start, stop, status, preflight test | Works |
+| Admin terminal: settings, users, dashboard, usage recording, cost view, archives | Not built |
 
 What has been tried against the real API is in [docs/testing-status.md](docs/testing-status.md).
 
@@ -45,6 +46,24 @@ If you put these variables in a Claude Code or VS Code settings file instead, re
 
 Run the tests with `dotnet test service/Comptroller.slnx`.
 
+## The admin terminal
+
+`claude-comptroller.exe` is the only command an admin types. It has no subcommands: every action is a key on its home screen. It has the service exe built in, so on a new server it's the only file you need.
+
+| Key | Does |
+| - | - |
+| `i` | Install: writes the service to `%ProgramFiles%\claude-comptroller`, a default `comptroller.json` (an existing one is kept), registers the service (delayed automatic start, restart on crash, virtual account `NT SERVICE\claude-comptroller`), creates the data and log folders, starts it, and runs the preflight test |
+| `t` · `x` | Takeoff (start) and Terminate (stop; requests in flight finish first) |
+| `s` | Status: the service, the proxy and health checks, with the commands they read |
+| `p` | Preflight test: config, service, proxy, a request through to Anthropic, and that replies stream without buffering. It sends no credentials, so it uses no seat |
+| `u` | Uninstall: stops and removes the service; data, logs and config are kept unless you choose otherwise |
+
+Installing, starting and stopping need an administrator terminal; if it isn't one, it offers to reopen itself as administrator. Each step shows the `sc.exe` or `icacls` command that does the same by hand.
+
+With no service installed, it finds a service running in a console (for example from `dev.ps1`) through `/health` and says so.
+
+To build it with the service inside, publish the service first (see below), then `cargo build --release --manifest-path tui\Cargo.toml`. `build.ps1` will do both in a later step.
+
 ## Running as a Windows Service
 
 The service runs in a console or under Windows Service Control, and detects which. Publish it as one self-contained exe:
@@ -53,7 +72,7 @@ The service runs in a console or under Windows Service Control, and detects whic
 dotnet publish service/Comptroller.Service -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish/service
 ```
 
-Installing is a job for the admin UI, which isn't built yet. To check that the service works on a machine, run this in an administrator terminal. It installs a temporary service, tests it against the fake upstream and removes it:
+The admin terminal installs it. To check by hand that the service works on a machine, run this in an administrator terminal. It installs a temporary service, tests it against the fake upstream and removes it:
 
 ```powershell
 .\dev\service-test.ps1

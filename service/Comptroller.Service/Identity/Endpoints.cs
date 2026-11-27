@@ -49,6 +49,20 @@ public static class Endpoints
             });
         });
 
+        // For the admin preflight test: five small events 200 ms apart, through the same
+        // listener and middleware as real replies, so buffering on the way shows up.
+        group.MapGet("/preflight/stream", async (HttpContext context) =>
+        {
+            context.Response.ContentType = "text/event-stream";
+            context.Response.Headers.CacheControl = "no-cache";
+            for (var i = 1; i <= 5; i++)
+            {
+                await context.Response.WriteAsync($"event: ping\ndata: {{\"n\":{i}}}\n\n", context.RequestAborted);
+                await context.Response.Body.FlushAsync(context.RequestAborted);
+                if (i < 5) await Task.Delay(200, context.RequestAborted);
+            }
+        });
+
         group.MapGet("/me", (HttpContext context) =>
         {
             if (DeviceFromToken(context, options.CurrentValue.Identity, store) is not { } device)

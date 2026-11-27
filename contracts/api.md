@@ -36,6 +36,7 @@ Every `/_comptroller/` request must send `X-Comptroller-Client` (any value). Wit
 | `POST /_comptroller/connect` `{"code": "XXXX-XXXX-XXXX"}` | one-time code | Manual mode: redeem a code for a token |
 | `POST /_comptroller/connect` (no body) | token | Manual mode: refresh |
 | `GET /_comptroller/info` | none | How to sign in: see below |
+| `GET /_comptroller/preflight/stream` | none | Five server-sent events 200 ms apart, for the admin preflight test |
 | `GET /_comptroller/me` | token | Who and what this token is. Works while suspended or expired |
 | `POST /_comptroller/disconnect` | token | Suspend this device |
 | `POST /_comptroller/reconnect?device=NAME` | Windows (+ token) or, in manual mode, token | Reactivate a device the user disconnected |
@@ -103,3 +104,4 @@ Same shape as the proxy errors. 400 bad request, 401 not signed in or unknown to
 - `config.status` is `error` when the file on disk was rejected. `error` says why, and the last good config stays in use.
 - `listenUrl` is what the service is listening on now. If the file says something else, a restart is needed.
 - `windowsService` is false for a console run.
+- The admin terminal reads this every 2 seconds; it's not logged.
