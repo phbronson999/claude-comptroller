@@ -83,7 +83,7 @@ LICENSE           MIT
 
 Each step should be shippable on its own.
 
-- **Branches track progress:** one branch per step (for example `step/01-prove-path`, `step/04-connect-tray`). Merge a branch to `main` when its step works end to end.
+- **Branches track progress:** one branch per step (for example `step/01-prove-path`, `step/04-connect-tray`). When its step works end to end, open a pull request. Changes reach `main` only through a PR, never a local merge. Label each PR with its type (`enhancement`, `bug` or `documentation`) and, for build steps, `step-NN`.
 - **GitHub issues are only for real problems:** bugs found after something is built, or things noticed along the way that can wait. Don't open issues for planned steps.
 - When you spot something that can wait, note it in your summary so it can become an issue. Don't fix it mid-step.
 

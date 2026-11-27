@@ -1,14 +1,17 @@
 using System.Diagnostics;
+using Comptroller.Service;
 using Comptroller.Service.Config;
 using Comptroller.Service.Identity;
 using Comptroller.Service.Proxy;
 using Microsoft.AspNetCore.Authentication.Negotiate;
+using Microsoft.Extensions.Hosting.WindowsServices;
 using Microsoft.Extensions.Options;
 using Serilog;
 using Serilog.Events;
 using Serilog.Formatting.Compact;
 using Yarp.ReverseProxy.Configuration;
 
+// Runs in a console, or under the Windows Service Control Manager, which it detects by itself.
 // Config file: --config <path>, then COMPTROLLER_CONFIG, then comptroller.json beside the exe.
 var configArg = Array.IndexOf(args, "--config");
 var configPath = Path.GetFullPath(
@@ -24,6 +27,8 @@ try
 }
 catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or DirectoryNotFoundException)
 {
+    // A service has no console. Unhandled, the reason lands in the Windows Application event log.
+    if (WindowsServiceHelpers.IsWindowsService()) throw;
     Console.Error.WriteLine(ex.Message);
     return 1;
 }
@@ -77,7 +82,14 @@ try
         return 0;
     }
 
-    var builder = WebApplication.CreateSlimBuilder(args);
+    var builder = WebApplication.CreateSlimBuilder(new WebApplicationOptions
+    {
+        // A service starts in System32.
+        ContentRootPath = WindowsServiceHelpers.IsWindowsService() ? AppContext.BaseDirectory : null,
+    });
+    builder.Services.AddWindowsService();
+    // On stop, requests in flight get this long to finish.
+    builder.Services.Configure<HostOptions>(host => host.ShutdownTimeout = TimeSpan.FromSeconds(config.Proxy.ShutdownTimeoutSeconds));
     builder.Services.AddSerilog();
     builder.Services.AddSingleton(identityStore);
     builder.Services.AddAuthentication(NegotiateDefaults.AuthenticationScheme).AddNegotiate();
@@ -88,7 +100,7 @@ try
         // Forward the client's headers as they are, without adding .NET tracing headers.
         .ConfigureHttpClient((_, handler) => handler.ActivityHeadersPropagator = null);
 
-    builder.WebHost.UseUrls(config.Proxy.ListenUrl);
+    builder.WebHost.UseUrls(config.Proxy.ListenUrl, $"http://127.0.0.1:{config.Proxy.AdminPort}");
     builder.WebHost.UseKestrelHttpsConfiguration();
     builder.WebHost.ConfigureKestrel(kestrel =>
     {
@@ -98,6 +110,9 @@ try
     });
 
     var app = builder.Build();
+
+    // Before logging: the admin TUI polls every few seconds.
+    app.UseAdminPort(store, config);
 
     // Metadata only: no bodies, no query strings, no header values.
     app.Use(async (context, next) =>
@@ -127,8 +142,10 @@ try
     app.MapComptrollerEndpoints();
     app.MapReverseProxy();
 
-    Log.Information("Listening on {ListenUrl}, forwarding to {UpstreamUrl}, config {ConfigPath}",
-        config.Proxy.ListenUrl, config.Proxy.UpstreamUrl, configPath);
+    Log.Information("Listening on {ListenUrl}, health on port {AdminPort}, forwarding to {UpstreamUrl}, config {ConfigPath}",
+        config.Proxy.ListenUrl, config.Proxy.AdminPort, config.Proxy.UpstreamUrl, configPath);
+    app.Lifetime.ApplicationStopping.Register(() => Log.Information("Stopping: waiting for requests in flight"));
+    app.Lifetime.ApplicationStopped.Register(() => Log.Information("Stopped"));
 
     await app.RunAsync();
     return 0;

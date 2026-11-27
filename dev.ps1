@@ -33,10 +33,11 @@ try {
     Write-Host '  $env:ANTHROPIC_BASE_URL = "http://localhost:8080"'
     Write-Host '  $env:ANTHROPIC_CUSTOM_HEADERS = "X-Comptroller-Token: $($s.token)"'
     Write-Host '  claude'
+    Write-Host 'Health: http://127.0.0.1:8081/health'
     Write-Host 'Ctrl+C stops everything.'
     Write-Host ''
 
-    & $dotnet "$root\service\Comptroller.Service\bin\Debug\net10.0\Comptroller.Service.dll" --config $config
+    & $dotnet "$root\service\Comptroller.Service\bin\Debug\net10.0\claude-comptroller-service.dll" --config $config
 }
 finally {
     if ($mock -and -not $mock.HasExited) { Stop-Process -Id $mock.Id -Confirm:$false }
