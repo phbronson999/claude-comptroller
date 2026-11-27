@@ -13,7 +13,9 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{menu_items, Action, App, Busy, Confirm, Screen, StepState, ToastKind, SECTIONS};
+use comptroller_admin::settings::SETTINGS;
+
+use crate::app::{menu_items, Action, App, Busy, Confirm, Screen, StepState, ToastKind, UserChange, SECTIONS};
 use crate::{logo, theme};
 use crate::widgets::{centered, keycap, ratio_bar, section, spinner};
 
@@ -38,6 +40,8 @@ pub fn draw(f: &mut Frame, app: &App) {
         Screen::Status => draw_status(f, app, body),
         Screen::Preflight => draw_preflight(f, app, body),
         Screen::Install | Screen::Uninstall => draw_steps(f, app, body),
+        Screen::Settings => crate::settings_screen::draw(f, app, body),
+        Screen::Users => crate::users_screen::draw(f, app, body),
     }
     draw_footer(f, app, footer);
     draw_toast(f, app, body);
@@ -49,7 +53,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     }
 }
 
-fn panel(title: &str, focus: bool) -> Block<'static> {
+pub fn panel(title: &str, focus: bool) -> Block<'static> {
     Block::bordered()
         .border_type(BorderType::Plain)
         .border_style(theme::fg(if focus { theme::BORDER_FOCUS } else { theme::BORDER }))
@@ -72,7 +76,7 @@ fn colored(text: impl Into<String>, color: Color) -> Vec<Span<'static>> {
     vec![Span::styled(text.into(), theme::fg(color))]
 }
 
-fn ago(secs: i64) -> String {
+pub fn ago(secs: i64) -> String {
     match secs {
         s if s < 60 => "just now".into(),
         s => format!("{} ago", short_duration(s as u64)),
@@ -93,6 +97,7 @@ fn status(app: &App) -> (String, Color, bool) {
     match &app.busy {
         Some(Busy::Starting) => return ("starting…".into(), theme::ORANGE, true),
         Some(Busy::Stopping) => return ("stopping…".into(), theme::ORANGE, true),
+        Some(Busy::Restarting) => return ("restarting…".into(), theme::ORANGE, true),
         None => {}
     }
     if s.config.is_err() || s.health.as_ref().is_some_and(|h| !h.config_ok()) {
@@ -145,6 +150,8 @@ fn description(app: &App, action: Action) -> (String, bool) {
         Action::Later(step) => (format!("Arrives in build step {step}"), false),
         Action::Open(Screen::Status) => ("Service, config and connection health".into(), true),
         Action::Open(Screen::Preflight) => ("Send one request end to end".into(), true),
+        Action::Open(Screen::Settings) => ("Every configurable value".into(), true),
+        Action::Open(Screen::Users) => ("People and the computers they connected".into(), true),
         Action::Open(Screen::Install) => match s.installed() {
             Some(i) => (format!("Installed · {}", i.exe.parent().map(|p| p.display().to_string()).unwrap_or_default()), false),
             None => ("Write the service, register it, start it".into(), true),
@@ -262,6 +269,9 @@ fn draw_glance(f: &mut Frame, app: &App, area: Rect) {
         if h.schema_version != SCHEMA_VERSION {
             notes.push((theme::ORANGE, format!("Database schema {} but this terminal expects {SCHEMA_VERSION}. Update both together.", h.schema_version)));
         }
+    }
+    if let Some((labels, _)) = &app.restart_waiting {
+        notes.push((theme::ORANGE, format!("Saved settings wait for a restart: {}.", labels.join(", "))));
     }
     if let Some(Err(e)) = &s.upstream {
         notes.push((theme::PINK, format!("Can't reach the upstream through the proxy: {e}")));
@@ -472,7 +482,7 @@ fn draw_preflight(f: &mut Frame, app: &App, body: Rect) {
     }
 }
 
-fn truncate(text: &str, max: usize) -> String {
+pub fn truncate(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
         text.to_string()
     } else {
@@ -601,10 +611,18 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         match app.confirm {
             Some(Confirm::Uninstall { .. }) => vec![("y", "uninstall"), ("d", "also remove data"), ("n", "cancel")],
             Some(Confirm::Elevate(_)) => vec![("y", "reopen as administrator"), ("n", "cancel")],
+            Some(Confirm::Unsaved) => vec![("s", "save"), ("d", "discard"), ("esc", "stay")],
+            Some(Confirm::Caution(_)) => vec![("y", "change it"), ("n", "cancel")],
+            Some(Confirm::Restart(_)) => vec![("y", "restart now"), ("n", "later")],
+            Some(Confirm::User(_)) => vec![("y", "yes"), ("n", "cancel")],
             _ => vec![("y", "terminate"), ("n", "cancel")],
         }
     } else {
         match app.screen {
+            Screen::Settings if app.settings.editing.is_some() => vec![("enter", "accept"), ("esc", "cancel"), ("←→", "move"), ("home end", "jump")],
+            Screen::Settings => vec![("esc", "Terminal"), ("↑↓", "setting"), ("←→", "group"), ("enter", "edit"), ("z", "default"), ("u", "undo"), ("s", "save")],
+            Screen::Users if app.users.typing() => vec![],
+            Screen::Users => vec![("esc", "Terminal"), ("↑↓", "move"), ("s", "suspend · resume"), ("r", "revoke"), ("del", "remove"), ("n", "new code")],
             Screen::Terminal => vec![("↑↓", "move"), ("enter", "open"), ("s", "Status"), ("p", "Preflight"), ("t", "Takeoff"), ("x", "Terminate"), ("?", "help"), ("q", "quit")],
             Screen::Status => vec![("esc", "Terminal"), ("p", "Preflight test"), ("t", "Takeoff"), ("x", "Terminate"), ("l", "open logs"), ("r", "refresh")],
             Screen::Preflight => vec![("esc", "Terminal"), ("enter", "run again"), ("s", "Status")],
@@ -686,13 +704,60 @@ fn draw_confirm(f: &mut Frame, app: &App, confirm: &Confirm, screen: Rect) {
             "Administrator needed",
             theme::ORANGE,
             vec![
-                Line::from(Span::styled(format!("{what} changes a Windows service, which needs an elevated terminal."), theme::text())),
+                Line::from(Span::styled(format!("{what} needs an administrator terminal."), theme::text())),
                 Line::default(),
                 Line::from(Span::styled("Reopen claude-comptroller as administrator? Windows will ask first.", theme::muted())),
             ],
             "reopen",
         ),
+        Confirm::Unsaved => {
+            let names: Vec<&str> = app.settings.pending.iter().map(|(i, _)| SETTINGS[*i].label).collect();
+            (
+                "Unsaved settings",
+                theme::ORANGE,
+                vec![
+                    Line::from(Span::styled(format!("{} changed but not saved: {}.", names.len(), names.join(", ")), theme::text())),
+                    Line::default(),
+                    Line::from(Span::styled("s saves them, d discards them, esc stays on Settings.", theme::muted())),
+                ],
+                "",
+            )
+        }
+        Confirm::Caution(index) => (
+            "Before you change it",
+            theme::ORANGE,
+            vec![
+                Line::from(Span::styled(SETTINGS[*index].label, theme::bold(theme::TEXT))),
+                Line::default(),
+                Line::from(Span::styled(SETTINGS[*index].caution.unwrap_or_default(), theme::text())),
+            ],
+            "change it",
+        ),
+        Confirm::Restart(labels) => (
+            "Restart to use the new settings",
+            theme::ORANGE,
+            vec![
+                Line::from(Span::styled(format!("Saved. The service reads these only when it starts: {}.", labels.join(", ")), theme::text())),
+                Line::default(),
+                Line::from(vec![
+                    Span::styled("Restart now? ", theme::text()),
+                    Span::styled("Requests in flight", theme::fg(theme::ORANGE)),
+                    Span::styled(format!(" finish first (up to {} s), then it starts again.", config.proxy.shutdown_timeout_seconds), theme::muted()),
+                ]),
+                Line::default(),
+                Line::from(vec![Span::styled("Equivalent: ", theme::muted()), Span::styled(format!("sc.exe stop {name} && sc.exe start {name}"), theme::text())]),
+            ],
+            "restart now",
+        ),
+        Confirm::User(change) => user_confirm(change),
     };
+    if matches!(confirm, Confirm::Unsaved) {
+        // Its keys are in the footer and the text.
+        let area = centered(screen, 86, lines.len() as u16 + 4);
+        f.render_widget(Clear, area);
+        f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(confirm_block(title)), area);
+        return;
+    }
     lines.push(Line::default());
     lines.push(
         Line::from(vec![
@@ -705,13 +770,69 @@ fn draw_confirm(f: &mut Frame, app: &App, confirm: &Confirm, screen: Rect) {
     );
     let area = centered(screen, 86, lines.len() as u16 + 4);
     f.render_widget(Clear, area);
-    let block = Block::bordered()
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(confirm_block(title)), area);
+}
+
+fn confirm_block(title: &str) -> Block<'static> {
+    Block::bordered()
         .border_type(BorderType::Plain)
         .border_style(theme::fg(theme::BORDER_FOCUS))
         .style(Style::new().bg(theme::PANEL))
         .title(Line::from(Span::styled(format!(" {title} "), theme::bold(theme::TEXT))))
-        .padding(Padding::new(2, 2, 1, 0));
-    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(block), area);
+        .padding(Padding::new(2, 2, 1, 0))
+}
+
+fn user_confirm(change: &UserChange) -> (&'static str, Color, Vec<Line<'static>>, &'static str) {
+    let text = |s: String| Line::from(Span::styled(s, theme::text()));
+    let muted = |s: &str| Line::from(Span::styled(s.to_string(), theme::muted()));
+    match change {
+        UserChange::RevokeDevice { device, user, .. } => (
+            "Revoke a computer",
+            theme::PINK,
+            vec![
+                text(format!("Revoke {device} for {user}?")),
+                Line::default(),
+                muted("Its next request is refused, and it can't connect again under this name. To let it back in later, remove it (del)."),
+            ],
+            "revoke",
+        ),
+        UserChange::RemoveDevice { device, user, .. } => (
+            "Remove a computer",
+            theme::PINK,
+            vec![
+                text(format!("Remove {device} from {user}'s computers?")),
+                Line::default(),
+                muted("Its token stops working at once. It can connect again as a new computer: in Windows mode by itself, in manual mode with a new code."),
+            ],
+            "remove",
+        ),
+        UserChange::RevokeUser { user, .. } => (
+            "Revoke a person",
+            theme::PINK,
+            vec![
+                text(format!("Revoke {user} on every computer?")),
+                Line::default(),
+                muted("All their computers are refused from the next request, and they can't connect new ones. r restores them."),
+            ],
+            "revoke",
+        ),
+        UserChange::RemoveUser { user, .. } => (
+            "Remove a person",
+            theme::PINK,
+            vec![
+                text(format!("Remove {user}, their computers and codes?")),
+                Line::default(),
+                muted("Their tokens stop working at once. In Windows mode they come back if they connect again and are still in the group; revoke them to keep them out."),
+            ],
+            "remove",
+        ),
+        UserChange::CancelCode { device, user, .. } => (
+            "Cancel a code",
+            theme::ORANGE,
+            vec![text(format!("Cancel the one-time code for {user} · {device}?")), Line::default(), muted("It stops working. Make a new one with n.")],
+            "cancel the code",
+        ),
+    }
 }
 
 fn draw_help(f: &mut Frame, screen: Rect) {

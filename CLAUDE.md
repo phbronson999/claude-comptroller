@@ -46,7 +46,7 @@ A self-hosted "control tower" for a small team's Claude Code traffic.
  └───────────────────────────────┘          └────────────────────────────────────────────┘
                                              ┌────────────────────────────────────────────┐
                                              │ claude-comptroller (Rust, ratatui TUI)     │
-                                             │  edits comptroller.json · reads SQLite     │
+                                             │  edits comptroller.json · SQLite: users    │
                                              │  controls service via SCM · /health        │
                                              └────────────────────────────────────────────┘
 ```

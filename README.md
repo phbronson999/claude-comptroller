@@ -16,8 +16,8 @@ Early development. **Not ready to roll out to a team.**
 | Identity: Windows sign-in or one-time codes, device tokens, disconnect and reconnect | Works |
 | Running as a Windows Service, health endpoint | Works. There is no installer yet |
 | Tray app for developer computers | Works. There is no installer yet |
-| Admin terminal: install, start, stop, status, preflight test | Works |
-| Admin terminal: settings, users, dashboard, usage recording, cost view, archives | Not built |
+| Admin terminal: install, start, stop, status, preflight test, settings, users | Works |
+| Admin terminal: dashboard, usage recording, cost view, archives | Not built |
 
 What has been tried against the real API is in [docs/testing-status.md](docs/testing-status.md).
 
@@ -57,8 +57,12 @@ Run the tests with `dotnet test service/Comptroller.slnx`.
 | `s` | Status: the service, the proxy and health checks, with the commands they read |
 | `p` | Preflight test: config, service, proxy, a request through to Anthropic, and that replies stream without buffering. It sends no credentials, so it uses no seat |
 | `u` | Uninstall: stops and removes the service; data, logs and config are kept unless you choose otherwise |
+| `c` | Settings: every value in `comptroller.json` with its default and limits. Changes are saved together with `s`; the old file is kept as `comptroller.json.bak`, and comments and anything else in the file are kept. Settings the service reads only at startup are marked, and saving one offers to restart the service |
+| `v` | Users: each person and the computers they connected, with status, last seen and token expiry. Suspend or resume a computer, revoke it, or remove it so it can connect again as new; revoke or remove a person. In `manual` mode, `n` creates a one-time code. Changes apply to the next request |
 
-Installing, starting and stopping need an administrator terminal; if it isn't one, it offers to reopen itself as administrator. Each step shows the `sc.exe` or `icacls` command that does the same by hand.
+Installing, starting, stopping, saving settings and changing users need an administrator terminal; if it isn't one, it offers to reopen itself as administrator. Each step shows the `sc.exe`, `icacls` or `sqlite3` command that does the same by hand.
+
+A computer the developer disconnected from the tray app can only be reconnected by them. An admin suspension can only be lifted by an admin.
 
 With no service installed, it finds a service running in a console (for example from `dev.ps1`) through `/health` and says so.
 
@@ -103,7 +107,7 @@ cargo run --manifest-path connect\Cargo.toml -- --settings-root dev\sandbox --se
 
 ## Configuration
 
-One file, `comptroller.json`. Start from [contracts/comptroller.sample.json](contracts/comptroller.sample.json) and pass it with `--config <path>`. Changes apply while running, except the listen URL, admin port, shutdown timeout, data folder and logging. An invalid file is ignored and the last good one stays in use.
+One file, `comptroller.json`. The admin terminal's Settings screen edits it; by hand, start from [contracts/comptroller.sample.json](contracts/comptroller.sample.json) and pass it with `--config <path>`. Changes apply while running, except the listen URL, admin port, shutdown timeout, data folder and logging. An invalid file is ignored and the last good one stays in use.
 
 | Setting | Default | Meaning |
 | - | - | - |
@@ -121,12 +125,12 @@ One file, `comptroller.json`. Start from [contracts/comptroller.sample.json](con
 | `Identity.TokenHeaderName` | `X-Comptroller-Token` | |
 | `Data.Folder` | `data` | Database folder, relative to the config file |
 | `General.OrganizationName` | empty | Shown in the tray app |
-| `Logging.Folder` · `Level` · `RetainedFiles` · `FileSizeLimitMb` | `logs` · `Information` · 14 · 20 | |
+| `Logging.Folder` · `Level` · `RetainedFiles` · `FileSizeLimitMb` | `logs` · `Information` · 14 · 20 | Level: `Verbose` to `Fatal`. Files kept 1–365, size 1–1024 MB |
 
-In `manual` mode, create a code for a user and device with:
+In `manual` mode, create one-time codes on the admin terminal's Users screen (`v`, then `n`). Without the terminal, the service can print one:
 
 ```powershell
-Comptroller.Service.exe --config comptroller.json --create-code jdoe LAPTOP-1
+claude-comptroller-service.exe --config comptroller.json --create-code jdoe LAPTOP-1
 ```
 
 ## Known limits
