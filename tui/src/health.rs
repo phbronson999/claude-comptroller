@@ -20,6 +20,25 @@ pub struct Health {
     pub in_flight: InFlight,
     #[serde(default)]
     pub recording: Recording,
+    #[serde(default)]
+    pub retention: Option<Retention>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Retention {
+    pub days: u32,
+    pub next_prune_utc: String,
+    pub last_prune: Option<LastPrune>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LastPrune {
+    pub finished_utc: String,
+    pub removed: u64,
+    pub freed_bytes: u64,
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -152,6 +171,9 @@ mod tests {
         assert_eq!(health.in_flight.count, 1);
         assert_eq!(health.in_flight.requests[0].path, "/v1/messages");
         assert_eq!(health.recording.dropped, 0);
+        let retention = health.retention.expect("retention");
+        assert_eq!(retention.days, 14);
+        assert_eq!(retention.last_prune.expect("last prune").removed, 1204);
     }
 
     #[test]

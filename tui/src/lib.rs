@@ -3,6 +3,7 @@
 //! changing settings, and the users and devices in the database.
 
 pub mod activity;
+pub mod blackbox;
 pub mod config;
 pub mod directory;
 pub mod health;

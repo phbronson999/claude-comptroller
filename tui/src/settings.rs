@@ -29,6 +29,8 @@ pub enum Kind {
     Cidrs,
     /// An HTTP header name.
     Header,
+    /// A time of day, typed and shown the local way, stored as HH:mm.
+    Time,
 }
 
 #[derive(Debug)]
@@ -213,6 +215,26 @@ pub const SETTINGS: &[Setting] = &[
         caution: None,
     },
     Setting {
+        section: "Data",
+        key: "RetentionDays",
+        label: "Retention days",
+        help: "How many days of requests the black box keeps: today and the days before it. Older ones are deleted each night.",
+        kind: Kind::Int { min: 1, max: 365 },
+        default: "14",
+        restart: false,
+        caution: None,
+    },
+    Setting {
+        section: "Data",
+        key: "PruneTime",
+        label: "Nightly prune time",
+        help: "When old requests are deleted each night, on the server's clock.",
+        kind: Kind::Time,
+        default: "02:00",
+        restart: false,
+        caution: None,
+    },
+    Setting {
         section: "Logging",
         key: "Folder",
         label: "Log folder",
@@ -359,6 +381,9 @@ pub fn parse(setting: &Setting, text: &str) -> Result<Value, String> {
             }
             Ok(Value::Array(list))
         }
+        Kind::Time => crate::dates::parse_time(text)
+            .map(|(h, m)| Value::String(format!("{h:02}:{m:02}")))
+            .ok_or_else(|| format!("Enter a time such as {}", crate::dates::format_time(2, 0))),
         Kind::Header => {
             let ok = !text.is_empty() && text.chars().all(|c| c.is_ascii_alphanumeric() || "-_".contains(c));
             if ok {
@@ -389,6 +414,14 @@ pub fn show(value: &Value) -> String {
         Value::Array(items) => items.iter().map(show).collect::<Vec<_>>().join(", "),
         Value::Null => String::new(),
         other => other.to_string(),
+    }
+}
+
+/// A setting's value as shown and edited: times the local way, everything else as typed.
+pub fn display(setting: &Setting, value: &Value) -> String {
+    match (setting.kind, value.as_str().and_then(crate::dates::parse_time)) {
+        (Kind::Time, Some((h, m))) => crate::dates::format_time(h, m),
+        _ => show(value),
     }
 }
 

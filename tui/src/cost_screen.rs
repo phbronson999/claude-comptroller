@@ -95,6 +95,11 @@ pub fn on_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char('m') => Period::Month,
         KeyCode::Char('3') => Period::Last30Days,
         KeyCode::Char('y') => Period::SeatYear,
+        KeyCode::Char('v') => {
+            // Seat plans are assigned per person on the Users screen.
+            app.screen = Screen::Users;
+            return;
+        }
         KeyCode::Char('s') => {
             let plans = app.snapshot.config_or_default().cost.seat_plans;
             app.cost.plans = Some(PlanEditor { plans, row: 0, column: 0, typing: None, dirty: false, warned: false });
@@ -235,7 +240,8 @@ pub fn draw(f: &mut Frame, app: &App, body: Rect) {
     let view = app.snapshot.cost.as_ref();
     let report = view.and_then(|v| v.report.as_ref().ok());
 
-    draw_cards(f, cards, report, &symbol, app.params.period);
+    let priced = app.snapshot.config_or_default().cost.seat_plans.iter().any(|p| p.price.is_some());
+    draw_cards(f, cards, report, &symbol, app.params.period, priced);
     draw_people(f, app, left, report, &symbol);
     draw_breakdown(f, app, right, report, &symbol);
 
@@ -244,7 +250,8 @@ pub fn draw(f: &mut Frame, app: &App, body: Rect) {
     }
 }
 
-fn draw_cards(f: &mut Frame, area: Rect, report: Option<&Report>, symbol: &str, period: Period) {
+/// `priced`: some seat plan has a price, so a missing seat total means no one is on one.
+fn draw_cards(f: &mut Frame, area: Rect, report: Option<&Report>, symbol: &str, period: Period, priced: bool) {
     let areas: [Rect; 4] = Layout::horizontal([Constraint::Fill(1); 4]).spacing(1).areas(area);
     let dash = || Span::styled("—", theme::faint());
     let period_name = match period {
@@ -277,6 +284,7 @@ fn draw_cards(f: &mut Frame, area: Rect, report: Option<&Report>, symbol: &str, 
             Span::styled(money(symbol, r.seat - r.api), theme::bold(theme::ORANGE)),
             Span::styled(format!("API would be {:.1}× cheaper", 1.0 / ratio), theme::fg(theme::ORANGE)),
         ),
+        None if r.seats == 0 && priced => (dash(), Span::styled("no one on a seat plan: press v", theme::fg(theme::ORANGE))),
         None if r.seats == 0 => (dash(), Span::styled("no seat prices yet: press s", theme::faint())),
         None => (dash(), Span::styled("no priced tokens yet", theme::faint())),
     };
@@ -308,7 +316,6 @@ fn draw_people(f: &mut Frame, app: &App, area: Rect, report: Option<&Report>, sy
     };
     let label = r.range.as_ref().map(|r| r.label.to_uppercase()).unwrap_or_default();
     lines.push(section(&label, None, width));
-    lines.push(Line::from(Span::styled(format!("{:<16}{:>9}{:>9}  {:<24}{}", "PERSON", "SEAT", "API", "SEAT ─ vs API ─", "VERDICT"), theme::label())));
 
     let names: Vec<String> = {
         let mut n: Vec<String> = r.people.iter().map(|p| p.name.clone()).collect();
@@ -316,16 +323,26 @@ fn draw_people(f: &mut Frame, app: &App, area: Rect, report: Option<&Report>, sy
         n
     };
     let top = r.people.iter().map(|p| p.api.max(p.seat.unwrap_or(0.0))).fold(0.0, f64::max).max(0.01);
-    let bar = 22;
-    for p in &r.people {
-        let color = color_of(&p.name, &names);
-        let seat = p.seat.map(|s| money(symbol, s)).unwrap_or_else(|| "—".into());
-        let verdict = match (p.seat, &p.plan) {
-            (_, None) => Span::styled("no seat plan: Users, p", theme::faint()),
+    let verdicts: Vec<Span> = r
+        .people
+        .iter()
+        .map(|p| match (p.seat, &p.plan) {
+            (_, None) => Span::styled("no plan: press v", theme::faint()),
             (None, Some(plan)) => Span::styled(format!("{plan} has no price"), theme::fg(theme::ORANGE)),
             (Some(seat), _) if seat <= p.api => Span::styled(format!("seat saves {}", money(symbol, p.api - seat)), theme::fg(theme::OK)),
-            (Some(seat), _) => Span::styled(format!("API cheaper by {}", money(symbol, seat - p.api)), theme::fg(theme::ORANGE)),
-        };
+            (Some(seat), _) => Span::styled(format!("API saves {}", money(symbol, seat - p.api)), theme::fg(theme::ORANGE)),
+        })
+        .collect();
+    // The bars take what's left after the figures and the longest verdict, so nothing wraps.
+    let longest = verdicts.iter().map(|v| v.content.chars().count()).max().unwrap_or(7).max(7);
+    let bar = width.saturating_sub(36 + 2 + 2 + longest).clamp(6, 22);
+    lines.push(Line::from(Span::styled(
+        format!("{:<16}{:>9}{:>9}  {:<w$}  {}", "PERSON", "SEAT", "API", "SEAT · vs API", "VERDICT", w = bar),
+        theme::label(),
+    )));
+    for (p, verdict) in r.people.iter().zip(verdicts) {
+        let color = color_of(&p.name, &names);
+        let seat = p.seat.map(|s| money(symbol, s)).unwrap_or_else(|| "—".into());
         lines.push(Line::from(
             vec![
                 Span::styled(format!("{:<16}", truncate(short_name(&p.name), 15)), theme::fg(color)),
@@ -345,6 +362,18 @@ fn draw_people(f: &mut Frame, app: &App, area: Rect, report: Option<&Report>, sy
     if r.people.is_empty() {
         lines.push(Line::from(Span::styled("No one on a seat plan and no recorded usage in this period.", theme::faint())));
     }
+    if r.people_without_plan > 0 && !app.snapshot.config_or_default().cost.seat_plans.is_empty() {
+        let n = r.people_without_plan;
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(
+            if n == 1 {
+                "1 person isn't on a seat plan, so their seat isn't counted. Press v for Users, pick them, then p.".to_string()
+            } else {
+                format!("{n} people aren't on a seat plan, so their seats aren't counted. Press v for Users, pick a person, then p.")
+            },
+            theme::fg(theme::ORANGE),
+        )));
+    }
     if !r.plans_without_price.is_empty() {
         lines.push(Line::default());
         lines.push(Line::from(Span::styled(format!("No price yet for {}: press s.", r.plans_without_price.join(", ")), theme::fg(theme::ORANGE))));
@@ -354,11 +383,16 @@ fn draw_people(f: &mut Frame, app: &App, area: Rect, report: Option<&Report>, sy
         lines.push(Line::default());
         lines.push(section("TO THE END OF THE PERIOD", None, width));
         let (y, m, d) = comptroller_admin::cost::civil(range.end_day);
+        let api_label = format!("API at today's daily rate, by {}", dates::format(y, m, d));
+        let pad = api_label.chars().count() + 2;
+        let figure = |s: f64| format!("{:>9}", money(symbol, s));
         lines.push(Line::from(vec![
-            Span::styled("Seats for the whole period ", theme::muted()),
-            Span::styled(money(symbol, year_seats), theme::text()),
-            Span::styled(format!(" · API at today's daily rate by {} ", dates::format(y, m, d)), theme::muted()),
-            Span::styled(money(symbol, projected), theme::fg(if projected >= year_seats { theme::OK } else { theme::ORANGE })),
+            Span::styled(format!("{:<pad$}", "Seats for the whole period"), theme::muted()),
+            Span::styled(figure(year_seats), theme::text()),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled(format!("{api_label:<pad$}"), theme::muted()),
+            Span::styled(figure(projected), theme::fg(if projected >= year_seats { theme::OK } else { theme::ORANGE })),
         ]));
         if app.params.period == Period::SeatYear {
             lines.push(Line::from(Span::styled("That's the comparison to look at before renewing.", theme::faint())));

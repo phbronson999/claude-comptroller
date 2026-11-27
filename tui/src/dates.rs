@@ -97,9 +97,92 @@ pub fn parse(text: &str) -> Option<(i64, u32, u32)> {
     parse_with(pattern(), text)
 }
 
+// ── times of day ────────────────────────────────────────────────────────────
+
+/// The short time pattern, such as `h:mm tt`. Falls back to `HH:mm`.
+pub fn time_pattern() -> &'static str {
+    static PATTERN: OnceLock<String> = OnceLock::new();
+    PATTERN.get_or_init(|| {
+        use windows::Win32::Globalization::{GetLocaleInfoEx, LOCALE_SSHORTTIME};
+        let mut buffer = [0u16; 80];
+        // SAFETY: a null locale name means the user's default; the buffer is ours.
+        let written = unsafe { GetLocaleInfoEx(windows::core::PCWSTR::null(), LOCALE_SSHORTTIME, Some(&mut buffer)) };
+        let text = if written > 1 { String::from_utf16_lossy(&buffer[..written as usize - 1]) } else { String::new() };
+        if text.contains('m') && (text.contains('h') || text.contains('H')) { text } else { "HH:mm".into() }
+    })
+}
+
+/// Formats a time of day with `pattern`: h/hh 12-hour, H/HH 24-hour, mm minutes, tt AM/PM.
+pub fn format_time_with(pattern: &str, hour: u32, minute: u32) -> String {
+    let mut out = String::new();
+    let chars: Vec<char> = pattern.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        let run = chars[i..].iter().take_while(|&&x| x == c).count();
+        let twelve = if hour % 12 == 0 { 12 } else { hour % 12 };
+        match c {
+            'h' => out += &if run >= 2 { format!("{twelve:02}") } else { twelve.to_string() },
+            'H' => out += &if run >= 2 { format!("{hour:02}") } else { hour.to_string() },
+            'm' => out += &format!("{minute:02}"),
+            't' => out += if hour < 12 { if run >= 2 { "AM" } else { "A" } } else if run >= 2 { "PM" } else { "P" },
+            's' => out += "00",
+            '\'' => {}
+            other => out.extend(std::iter::repeat_n(other, run)),
+        }
+        i += run;
+    }
+    out
+}
+
+pub fn format_time(hour: u32, minute: u32) -> String {
+    format_time_with(time_pattern(), hour, minute)
+}
+
+/// Reads a time typed as 2:00, 02:00, 14:30, 2am or 2:30 PM.
+pub fn parse_time(text: &str) -> Option<(u32, u32)> {
+    let lower = text.trim().to_ascii_lowercase();
+    let (body, half) = if let Some(b) = lower.strip_suffix("am").or_else(|| lower.strip_suffix("a")) {
+        (b.trim(), Some(false))
+    } else if let Some(b) = lower.strip_suffix("pm").or_else(|| lower.strip_suffix("p")) {
+        (b.trim(), Some(true))
+    } else {
+        (lower.as_str(), None)
+    };
+    let mut parts = body.split([':', '.', ' ']).filter(|p| !p.is_empty());
+    let hour: u32 = parts.next()?.parse().ok()?;
+    let minute: u32 = parts.next().map(|m| m.parse().ok()).unwrap_or(Some(0))?;
+    if parts.next().is_some() || minute > 59 {
+        return None;
+    }
+    let hour = match half {
+        Some(pm) if (1..=12).contains(&hour) => (hour % 12) + if pm { 12 } else { 0 },
+        Some(_) => return None,
+        None if hour <= 23 => hour,
+        None => return None,
+    };
+    Some((hour, minute))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn times_read_and_show_the_local_way() {
+        assert_eq!(format_time_with("h:mm tt", 2, 0), "2:00 AM");
+        assert_eq!(format_time_with("h:mm tt", 14, 30), "2:30 PM");
+        assert_eq!(format_time_with("HH:mm", 2, 0), "02:00");
+        assert_eq!(parse_time("2:00"), Some((2, 0)));
+        assert_eq!(parse_time("14:30"), Some((14, 30)));
+        assert_eq!(parse_time("2am"), Some((2, 0)));
+        assert_eq!(parse_time("2:30 PM"), Some((14, 30)));
+        assert_eq!(parse_time("12:15 am"), Some((0, 15)));
+        assert_eq!(parse_time("12 pm"), Some((12, 0)));
+        assert_eq!(parse_time("25:00"), None);
+        assert_eq!(parse_time("13 pm"), None);
+        assert_eq!(parse_time(&format_time(2, 0)), Some((2, 0)), "the local format reads back");
+    }
 
     #[test]
     fn formats_like_windows() {

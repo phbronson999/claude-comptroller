@@ -24,7 +24,9 @@
     "TokenHeaderName": "X-Comptroller-Token"
   },
   "Data": {
-    "Folder": "data"
+    "Folder": "data",
+    "RetentionDays": 14,
+    "PruneTime": "02:00"
   },
   "Logging": {
     "Folder": "logs",

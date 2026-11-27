@@ -29,6 +29,7 @@ pub enum Screen {
     Radar,
     Dashboard,
     Cost,
+    BlackBox,
 }
 
 impl Screen {
@@ -54,6 +55,7 @@ impl Screen {
             Screen::Radar => "Radar",
             Screen::Dashboard => "Dashboard",
             Screen::Cost => "Cost",
+            Screen::BlackBox => "Black box",
         }
     }
 }
@@ -88,7 +90,7 @@ pub const SECTIONS: [(&str, &[MenuItem]); 5] = [
         MenuItem { key: 'p', title: "Preflight test", action: Action::Open(Screen::Preflight) },
     ]),
     ("DATA", &[
-        MenuItem { key: 'b', title: "Black box", action: Action::Later(9) },
+        MenuItem { key: 'b', title: "Black box", action: Action::Open(Screen::BlackBox) },
         MenuItem { key: 'a', title: "Archives", action: Action::Later(10) },
     ]),
     ("CONFIGURE", &[
@@ -125,6 +127,8 @@ pub struct Snapshot {
     pub summary: Option<Result<Option<Summary>, String>>,
     /// The Cost screen's report and the pricing table it used, read while it's open.
     pub cost: Option<CostView>,
+    /// Per-day counts, read while the Black box is open. `Ok(None)`: no database yet.
+    pub black_box: Option<Result<Option<comptroller_admin::blackbox::BlackBox>, String>>,
 }
 
 #[derive(Clone)]
@@ -219,6 +223,8 @@ pub enum Confirm {
     /// Saved settings that take effect after a restart.
     Restart(Vec<&'static str>),
     User(UserChange),
+    /// Removing this many requests older than the retention, now.
+    Prune(i64),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -384,7 +390,12 @@ fn poll_once(
         _ => None,
     };
 
-    Snapshot { place, config, service, health, db_size, upstream: last_upstream.1.clone(), service_name, users, today, feed, summary, cost }
+    let black_box = match (&db, watching) {
+        (Some(db), Screen::BlackBox) => Some(comptroller_admin::blackbox::read(db, offset)),
+        _ => None,
+    };
+
+    Snapshot { place, config, service, health, db_size, upstream: last_upstream.1.clone(), service_name, users, today, feed, summary, cost, black_box }
 }
 
 impl App {
@@ -782,6 +793,10 @@ impl App {
                     self.confirm = None;
                     self.restart();
                 }
+                (Confirm::Prune(_), KeyCode::Char('y')) => {
+                    self.confirm = None;
+                    crate::black_box_screen::prune(self);
+                }
                 (Confirm::User(change), KeyCode::Char('y')) => {
                     let change = change.clone();
                     self.confirm = None;
@@ -844,6 +859,7 @@ impl App {
             Screen::Radar => crate::radar_screen::on_key(self, key),
             Screen::Dashboard => crate::dashboard_screen::on_key(self, key),
             Screen::Cost => crate::cost_screen::on_key(self, key),
+            Screen::BlackBox => crate::black_box_screen::on_key(self, key),
         }
     }
 

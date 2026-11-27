@@ -77,7 +77,8 @@ pub fn finish(id: u64, ok: bool, summary: impl Into<String>) {
     let took = log.entries[index].started.elapsed();
     let command = log.entries[index].command.clone();
 
-    // The same check with the same result folds into the earlier line.
+    // The same check with the same result folds into the earlier line, which moves to the
+    // bottom so the panel stays in time order.
     let background = log.entries[index].background;
     let earlier = (index.saturating_sub(MERGE_WINDOW)..index).rev().find(|&i| {
         let e = &log.entries[i];
@@ -87,12 +88,13 @@ pub fn finish(id: u64, ok: bool, summary: impl Into<String>) {
         Some(i) => {
             let now = clock();
             log.entries.remove(index);
-            let entry = &mut log.entries[i];
+            let Some(mut entry) = log.entries.remove(i) else { return };
             entry.repeats += 1;
             entry.clock = now;
             if let Some(outcome) = &mut entry.outcome {
                 outcome.took = took;
             }
+            log.entries.push_back(entry);
         }
         None => log.entries[index].outcome = Some(Outcome { ok, summary, took }),
     }

@@ -25,6 +25,7 @@ public static class Health
         var json = new JsonSerializerOptions(JsonSerializerDefaults.Web);
         var inFlight = app.Services.GetRequiredService<Recording.InFlight>();
         var log = app.Services.GetRequiredService<Recording.RequestLog>();
+        var pruner = app.Services.GetRequiredService<Recording.Pruner>();
 
         app.Use(async (context, next) =>
         {
@@ -70,6 +71,14 @@ public static class Health
                     }),
                 },
                 recording = new { queued = log.Queued, dropped = log.Dropped, error = log.LastError },
+                retention = new
+                {
+                    days = store.CurrentValue.Data.RetentionDays,
+                    nextPruneUtc = IdentityStore.Format(pruner.Next.ToUniversalTime()),
+                    lastPrune = pruner.Last is { } last
+                        ? new { finishedUtc = IdentityStore.Format(last.FinishedUtc), removed = last.Removed, freedBytes = last.FreedBytes, error = last.Error }
+                        : null,
+                },
             }, json);
         });
     }

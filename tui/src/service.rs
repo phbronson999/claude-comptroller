@@ -198,7 +198,7 @@ pub fn relaunch_as_admin() -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let args: Vec<String> = std::env::args().skip(1).map(|a| if a.contains(' ') { format!("\"{a}\"") } else { a }).collect();
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
-    activity::start(format!("Start-Process \"{}\" -Verb RunAs", exe.display()));
+    let id = activity::start(format!("Start-Process \"{}\" -Verb RunAs", exe.display()));
     // SAFETY: every string outlives the call.
     let result = unsafe {
         ShellExecuteW(
@@ -211,7 +211,21 @@ pub fn relaunch_as_admin() -> Result<(), String> {
         )
     };
     let _ = PCWSTR::null();
-    if result.0 as usize > 32 { Ok(()) } else { Err("Windows didn't start it as administrator.".into()) }
+    match result.0 as usize {
+        code if code > 32 => {
+            activity::finish(id, true, "opened as administrator");
+            Ok(())
+        }
+        // SE_ERR_ACCESSDENIED: the Windows prompt was cancelled.
+        5 => {
+            activity::finish(id, false, "cancelled");
+            Err("Cancelled: still not administrator.".into())
+        }
+        code => {
+            activity::finish(id, false, format!("failed (code {code})"));
+            Err("Windows didn't start it as administrator.".into())
+        }
+    }
 }
 
 #[cfg(test)]

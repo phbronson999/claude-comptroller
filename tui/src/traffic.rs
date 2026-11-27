@@ -345,12 +345,12 @@ mod tests {
         c.execute("INSERT INTO schema_version (version) VALUES (?1)", [crate::SCHEMA_VERSION as i64]).unwrap();
         let at = |ago: i64| format_utc(now() - ago);
         let rows: [(i64, &str, &str, i64, i64, Option<&str>, Option<&str>); 6] = [
-            (3600 * 48, "EXAMPLE\\amy", "LAPTOP-1", 200, 900, None, Some("parsed")),
-            (300, "EXAMPLE\\amy", "LAPTOP-1", 200, 1000, None, Some("parsed")),
-            (200, "EXAMPLE\\amy", "LAPTOP-1", 200, 3000, None, Some("missing")),
-            (120, "EXAMPLE\\bo", "DESK-2", 429, 40, None, None),
-            (60, "EXAMPLE\\bo", "DESK-2", 502, 30000, Some("RequestTimedOut"), None),
-            (30, "EXAMPLE\\bo", "DESK-2", 200, 50, Some("RequestCanceled"), Some("missing")),
+            (3600 * 48, "EXAMPLE\\goose", "LAPTOP-1", 200, 900, None, Some("parsed")),
+            (300, "EXAMPLE\\goose", "LAPTOP-1", 200, 1000, None, Some("parsed")),
+            (200, "EXAMPLE\\goose", "LAPTOP-1", 200, 3000, None, Some("missing")),
+            (120, "EXAMPLE\\maverick", "DESK-2", 429, 40, None, None),
+            (60, "EXAMPLE\\maverick", "DESK-2", 502, 30000, Some("RequestTimedOut"), None),
+            (30, "EXAMPLE\\maverick", "DESK-2", 200, 50, Some("RequestCanceled"), Some("missing")),
         ];
         for (ago, user, device, status, ms, error, usage) in rows {
             c.execute(
@@ -373,14 +373,14 @@ mod tests {
         }
         assert_eq!(today.requests, 5);
         assert_eq!(today.limit_hits, 1);
-        assert_eq!(today.limit_hits_by_user, vec![("EXAMPLE\\bo".to_string(), 1)]);
+        assert_eq!(today.limit_hits_by_user, vec![("EXAMPLE\\maverick".to_string(), 1)]);
         assert_eq!(today.errors, 1, "a timeout counts, a cancel doesn't");
         assert_eq!(today.usage_missing, 2);
-        assert_eq!(today.by_user["EXAMPLE\\amy"], 2);
+        assert_eq!(today.by_user["EXAMPLE\\goose"], 2);
         assert_eq!(today.p95_ms, Some(3000));
-        assert_eq!(today.last.as_ref().map(|l| l.1.as_str()), Some("EXAMPLE\\bo"));
+        assert_eq!(today.last.as_ref().map(|l| l.1.as_str()), Some("EXAMPLE\\maverick"));
         assert_eq!(today.active.len(), 2);
-        assert!(today.active.iter().any(|(u, _, hit)| u == "EXAMPLE\\bo" && *hit));
+        assert!(today.active.iter().any(|(u, _, hit)| u == "EXAMPLE\\maverick" && *hit));
     }
 
     #[test]
@@ -398,7 +398,7 @@ mod tests {
         assert_eq!(two.requests + two.previous.iter().sum::<i64>(), 6);
         assert_eq!(two_weeks.limit_hits, 1);
         assert_eq!(two_weeks.errors, 1);
-        assert_eq!(two_weeks.people[0].name, "EXAMPLE\\amy");
+        assert_eq!(two_weeks.people[0].name, "EXAMPLE\\goose");
         assert_eq!((two_weeks.p50_ms, two_weeks.max_ms), (Some(1000), Some(3000)));
         let today = summary(&db, 1, 0).unwrap().unwrap();
         assert_eq!(today.buckets.len(), 24);
@@ -411,7 +411,7 @@ mod tests {
         let all = recent(&db, 100, None, false).unwrap().unwrap();
         assert_eq!(all.len(), 6);
         assert!(all[0].id > all[1].id, "newest first");
-        assert_eq!(recent(&db, 100, Some("EXAMPLE\\amy"), false).unwrap().unwrap().len(), 3);
+        assert_eq!(recent(&db, 100, Some("EXAMPLE\\goose"), false).unwrap().unwrap().len(), 3);
         let errors = recent(&db, 100, None, true).unwrap().unwrap();
         assert_eq!(errors.iter().map(|r| r.status).collect::<Vec<_>>(), vec![502, 429]);
         assert!(errors[0].is_error() && errors[1].limit_hit());
