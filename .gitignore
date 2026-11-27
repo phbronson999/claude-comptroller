@@ -1,0 +1,17 @@
+# Design mockups stay local
+docs/mockups/
+
+# Build output
+bin/
+obj/
+target/
+publish/
+
+# Runtime data
+data/
+logs/
+*.bak
+
+# Editor
+.vs/
+*.user
