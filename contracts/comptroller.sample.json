@@ -5,8 +5,21 @@
     "ActivityTimeoutMinutes": 10,
     "StripForwardedHeaders": true
   },
+  "Access": {
+    "AllowedCidrs": [
+      "127.0.0.1/32",
+      "::1/128"
+    ]
+  },
   "Identity": {
+    "Mode": "windows",
+    "AllowedGroup": "Claude Code Users",
+    "TokenLifetimeDays": 7,
+    "CodeLifetimeHours": 24,
     "TokenHeaderName": "X-Comptroller-Token"
+  },
+  "Data": {
+    "Folder": "data"
   },
   "Logging": {
     "Folder": "logs",

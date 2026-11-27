@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using Comptroller.Service.Config;
+using Comptroller.Service.Identity;
 using Comptroller.Service.Proxy;
+using Microsoft.AspNetCore.Authentication.Negotiate;
 using Microsoft.Extensions.Options;
 using Serilog;
 using Serilog.Events;
@@ -47,10 +49,39 @@ Log.Logger = new LoggerConfiguration()
         retainedFileCountLimit: config.Logging.RetainedFiles)
     .CreateLogger();
 
+// Relative to the config file, like the log folder.
+var databasePath = Path.Combine(Path.GetFullPath(config.Data.Folder, Path.GetDirectoryName(configPath)!), "comptroller.db");
+
 try
 {
+    var identityStore = new IdentityStore(databasePath);
+
+    // Manual identity mode, until the admin TUI can do this: print a one-time code and exit.
+    var codeArg = Array.IndexOf(args, "--create-code");
+    if (codeArg >= 0)
+    {
+        if (codeArg + 2 >= args.Length)
+        {
+            Console.Error.WriteLine("Usage: --create-code <user> <device>");
+            return 1;
+        }
+
+        var (userId, revoked) = identityStore.EnsureUser(args[codeArg + 1], "manual");
+        if (revoked)
+        {
+            Console.Error.WriteLine($"{args[codeArg + 1]} is revoked.");
+            return 1;
+        }
+
+        Console.WriteLine(identityStore.CreateCode(userId, args[codeArg + 2], TimeSpan.FromHours(config.Identity.CodeLifetimeHours)));
+        return 0;
+    }
+
     var builder = WebApplication.CreateSlimBuilder(args);
     builder.Services.AddSerilog();
+    builder.Services.AddSingleton(identityStore);
+    builder.Services.AddAuthentication(NegotiateDefaults.AuthenticationScheme).AddNegotiate();
+    builder.Services.AddAuthorization();
     builder.Services.AddSingleton<IOptionsMonitor<ComptrollerConfig>>(store);
     builder.Services.AddSingleton<IProxyConfigProvider, ComptrollerProxyConfig>();
     builder.Services.AddReverseProxy()
@@ -72,7 +103,6 @@ try
     app.Use(async (context, next) =>
     {
         var started = Stopwatch.GetTimestamp();
-        var hasToken = context.Request.Headers.ContainsKey(store.CurrentValue.Identity.TokenHeaderName);
         try
         {
             await next();
@@ -80,15 +110,21 @@ try
         finally
         {
             Log.Information(
-                "{Method} {Path} {Status} {ElapsedMs:0} ms, token header {TokenHeader}",
+                "{Method} {Path} {Status} {ElapsedMs:0} ms {User} {Device}",
                 context.Request.Method,
                 context.Request.Path.Value,
                 context.Response.StatusCode,
                 Stopwatch.GetElapsedTime(started).TotalMilliseconds,
-                hasToken ? "present" : "missing");
+                context.Items[ProxyGate.UserItem] ?? "-",
+                context.Items[ProxyGate.DeviceItem] ?? "-");
         }
     });
 
+    app.UseAllowedAddresses();
+    app.UseAuthentication();
+    app.UseDeviceTokens();
+
+    app.MapComptrollerEndpoints();
     app.MapReverseProxy();
 
     Log.Information("Listening on {ListenUrl}, forwarding to {UpstreamUrl}, config {ConfigPath}",
