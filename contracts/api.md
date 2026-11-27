@@ -95,7 +95,7 @@ Same shape as the proxy errors. 400 bad request, 401 not signed in or unknown to
   "uptimeSeconds": 273600,
   "windowsService": true,
   "config": { "status": "ok", "error": null, "path": "C:\\…\\comptroller.json", "loadedUtc": "2026-11-27T09:00:00.000Z" },
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "listenUrl": "http://localhost:8080",
   "upstreamUrl": "https://api.anthropic.com",
   "inFlight": {

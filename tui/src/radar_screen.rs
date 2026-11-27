@@ -14,17 +14,14 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{App, Screen, ToastKind, RADAR_SECS};
+use crate::app::{App, Screen, ToastKind};
 use crate::theme;
 use crate::ui::{panel, truncate};
 use crate::widgets::{centered, keycap, spinner};
 
 #[derive(Default)]
 pub struct State {
-    /// The person shown, or everyone.
-    pub user: Option<String>,
-    pub errors_only: bool,
-    /// The feed as it was when paused.
+    /// The feed as it was when paused. The filters are in `app.params`.
     pub paused: Option<(Vec<Request>, Vec<FlyingRequest>)>,
     pub row: usize,
     pub details: bool,
@@ -40,8 +37,8 @@ fn feed(app: &App) -> (Vec<Request>, Vec<FlyingRequest>) {
         _ => Vec::new(),
     };
     let mut flying: Vec<FlyingRequest> = app.snapshot.health.as_ref().map(|h| h.in_flight.requests.clone()).unwrap_or_default();
-    flying.retain(|f| app.radar.user.is_none() || f.user == app.radar.user);
-    if app.radar.errors_only {
+    flying.retain(|f| app.params.feed_user.is_none() || f.user == app.params.feed_user);
+    if app.params.errors_only {
         flying.clear();
     }
     // Newest first, like the rest of the feed.
@@ -59,7 +56,7 @@ fn today(app: &App) -> Option<&Today> {
 /// Everyone who sent something today, for the filter and the colors.
 pub fn people(app: &App) -> Vec<String> {
     let mut people: Vec<String> = today(app).map(|t| t.by_user.keys().cloned().collect()).unwrap_or_default();
-    if let Some(user) = &app.radar.user {
+    if let Some(user) = &app.params.feed_user {
         if !people.contains(user) {
             people.push(user.clone());
         }
@@ -70,7 +67,8 @@ pub fn people(app: &App) -> Vec<String> {
 
 const PALETTE: [Color; 6] = [theme::ACCENT, theme::ORANGE, theme::PINK, theme::OK, Color::Rgb(180, 150, 255), Color::Rgb(250, 215, 90)];
 
-fn color_of(person: &str, people: &[String]) -> Color {
+/// Each person's color, the same on every screen that lists them in the same order.
+pub fn color_of(person: &str, people: &[String]) -> Color {
     people.iter().position(|p| p == person).map(|i| PALETTE[i % PALETTE.len()]).unwrap_or(theme::MUTED)
 }
 
@@ -99,19 +97,19 @@ pub fn on_key(app: &mut App, key: KeyEvent) {
         }
         KeyCode::Char('f') | KeyCode::Char('F') => {
             let people = people(app);
-            let at = app.radar.user.as_ref().and_then(|u| people.iter().position(|p| p == u)).map(|i| i + 1).unwrap_or(0);
+            let at = app.params.feed_user.as_ref().and_then(|u| people.iter().position(|p| p == u)).map(|i| i + 1).unwrap_or(0);
             // 0 is everyone; then each person in turn.
             let next = if key.code == KeyCode::Char('f') { (at + 1) % (people.len() + 1) } else { (at + people.len()) % (people.len() + 1) };
-            app.radar.user = if next == 0 { None } else { Some(people[next - 1].clone()) };
+            app.params.feed_user = if next == 0 { None } else { Some(people[next - 1].clone()) };
             app.radar.row = 0;
             app.radar.paused = None;
-            app.set_feed_filter(app.radar.user.clone(), app.radar.errors_only);
+            app.send_params();
         }
         KeyCode::Char('e') => {
-            app.radar.errors_only = !app.radar.errors_only;
+            app.params.errors_only = !app.params.errors_only;
             app.radar.row = 0;
             app.radar.paused = None;
-            app.set_feed_filter(app.radar.user.clone(), app.radar.errors_only);
+            app.send_params();
         }
         KeyCode::Up | KeyCode::Char('k') if count > 0 => app.radar.row = app.radar.row.saturating_sub(1),
         KeyCode::Down | KeyCode::Char('j') if count > 0 => app.radar.row = (app.radar.row + 1).min(count - 1),
@@ -123,7 +121,10 @@ pub fn on_key(app: &mut App, key: KeyEvent) {
                 app.toast(ToastKind::Info, "Still in flight: its details are recorded when it finishes.");
             }
         }
-        KeyCode::Char('d') => app.toast(ToastKind::Info, "The Dashboard arrives in build step 8."),
+        KeyCode::Char('d') => {
+            app.radar.paused = None;
+            app.screen = Screen::Dashboard;
+        }
         _ => {}
     }
 }
@@ -150,23 +151,7 @@ pub fn tokens(n: i64) -> String {
     }
 }
 
-/// Local time of day, from seconds since 1970.
-fn clock(utc: i64) -> String {
-    let offset = local_offset();
-    let t = (utc + offset).rem_euclid(86_400);
-    format!("{:02}:{:02}:{:02}", t / 3600, t % 3600 / 60, t % 60)
-}
-
-/// Seconds to add to UTC for local time, now.
-fn local_offset() -> i64 {
-    // SAFETY: fills plain structs.
-    let (local, utc) = unsafe { (windows::Win32::System::SystemInformation::GetLocalTime(), windows::Win32::System::SystemInformation::GetSystemTime()) };
-    let secs = |t: &windows::Win32::Foundation::SYSTEMTIME| {
-        parse_utc(&format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond)).unwrap_or(0)
-    };
-    // Rounded to a quarter hour: the two readings can straddle a second.
-    ((secs(&local) - secs(&utc)) as f64 / 900.0).round() as i64 * 900
-}
+use comptroller_admin::local_clock as clock;
 
 /// The note for a finished request: what went wrong, or what it used.
 fn note(r: &Request) -> (String, Color) {
@@ -205,24 +190,49 @@ pub fn draw(f: &mut Frame, app: &App, body: Rect) {
     }
 }
 
+/// The four cards Radar and the Dashboard share.
+pub struct Figures {
+    /// "TODAY" or "7 DAYS".
+    pub period: String,
+    pub requests: i64,
+    pub p95_ms: Option<i64>,
+    pub limit_hits: i64,
+    pub limit_hits_by_user: Vec<(String, i64)>,
+    pub errors: i64,
+}
+
 fn draw_cards(f: &mut Frame, app: &App, area: Rect, people: &[String]) {
+    let figures = today(app).map(|t| Figures {
+        period: "TODAY".into(),
+        requests: t.requests,
+        p95_ms: t.p95_ms,
+        limit_hits: t.limit_hits,
+        limit_hits_by_user: t.limit_hits_by_user.clone(),
+        errors: t.errors,
+    });
+    draw_figures(f, app, area, figures.as_ref(), people);
+}
+
+pub fn draw_figures(f: &mut Frame, app: &App, area: Rect, figures: Option<&Figures>, people: &[String]) {
     let areas: [Rect; 4] = Layout::horizontal([Constraint::Fill(1); 4]).spacing(1).areas(area);
     let dash = || Span::styled("—", theme::faint());
-    let t = today(app);
+    let limits = app.snapshot.config_or_default().dashboard;
+    let t = figures;
 
     card(
         f,
         areas[0],
-        "REQUESTS TODAY",
+        &format!("REQUESTS {}", t.map(|t| t.period.as_str()).unwrap_or("TODAY")),
         t.map(|t| Span::styled(t.requests.to_string(), theme::bold(theme::TEXT))).unwrap_or_else(dash),
-        vec![Span::styled("since midnight", theme::faint())],
+        vec![Span::styled(if t.is_some_and(|t| t.period != "TODAY") { "local days" } else { "since midnight" }, theme::faint())],
     );
+    let slow = |ms: i64| ms > limits.p95_warning_seconds as i64 * 1000;
     card(
         f,
         areas[1],
         "P95 LATENCY",
-        t.and_then(|t| t.p95_ms).map(|ms| Span::styled(seconds(ms), theme::bold(theme::TEXT))).unwrap_or_else(dash),
-        vec![Span::styled("of complete replies", theme::faint())],
+        t.and_then(|t| t.p95_ms).map(|ms| Span::styled(seconds(ms), theme::bold(if slow(ms) { theme::ORANGE } else { theme::TEXT }))).unwrap_or_else(dash),
+        vec![Span::styled(format!("of complete replies · warn over {} s", limits.p95_warning_seconds), theme::faint())],
     );
     let mut hits = vec![Span::styled("429s ", theme::faint())];
     for (user, n) in t.map(|t| t.limit_hits_by_user.clone()).unwrap_or_default().into_iter().take(3) {
@@ -235,15 +245,16 @@ fn draw_cards(f: &mut Frame, app: &App, area: Rect, people: &[String]) {
         t.map(|t| Span::styled(t.limit_hits.to_string(), theme::bold(if t.limit_hits > 0 { theme::ORANGE } else { theme::TEXT }))).unwrap_or_else(dash),
         hits,
     );
+    let warn = limits.error_rate_warning_percent;
     let (value, detail) = match t {
         Some(t) if t.requests > 0 => {
             let share = t.errors as f64 * 100.0 / t.requests as f64;
-            let over = share > 5.0;
+            let over = share > warn;
             (
                 Span::styled(format!("{share:.1}%"), theme::bold(if over { theme::PINK } else { theme::TEXT })),
                 vec![
                     Span::styled(format!("{} of {} · ", t.errors, t.requests), theme::faint()),
-                    Span::styled(if over { "over 5%" } else { "under 5%" }, theme::fg(if over { theme::PINK } else { theme::OK })),
+                    Span::styled(format!("{} {warn}%", if over { "over" } else { "under" }), theme::fg(if over { theme::PINK } else { theme::OK })),
                 ],
             )
         }
@@ -273,18 +284,18 @@ fn draw_feed(f: &mut Frame, app: &App, area: Rect, people: &[String]) {
             Span::styled(format!(" {text} "), theme::fg(color))
         }
     };
-    bar.push(chip("all".into(), app.radar.user.is_none(), theme::TEXT));
+    bar.push(chip("all".into(), app.params.feed_user.is_none(), theme::TEXT));
     for person in people {
-        bar.push(chip(short_name(person).to_string(), app.radar.user.as_deref() == Some(person), color_of(person, people)));
+        bar.push(chip(short_name(person).to_string(), app.params.feed_user.as_deref() == Some(person), color_of(person, people)));
     }
     bar.push(Span::styled(" │ ", theme::faint()));
-    bar.push(chip("errors only".into(), app.radar.errors_only, theme::TEXT));
+    bar.push(chip("errors only".into(), app.params.errors_only, theme::TEXT));
     let in_flight = app.snapshot.health.as_ref().map(|h| h.in_flight.count).unwrap_or(0);
     let status = match (&app.radar.paused, app.snapshot.health.is_some()) {
         (Some(_), _) => vec![Span::styled("❚❚ paused", theme::fg(theme::ORANGE)), Span::styled(" · space resumes", theme::faint())],
         (None, true) => vec![
             Span::styled("● live", theme::fg(theme::OK)),
-            Span::styled(format!(" · {RADAR_SECS} s refresh · {in_flight} in flight"), theme::faint()),
+            Span::styled(format!(" · {} s refresh · {in_flight} in flight", app.live_secs()), theme::faint()),
         ],
         (None, false) => vec![Span::styled("○ service not answering", theme::faint())],
     };
@@ -307,7 +318,7 @@ fn draw_feed(f: &mut Frame, app: &App, area: Rect, people: &[String]) {
         }
         Some(Ok(None)) => lines.push(Line::from(Span::styled("No database yet. The service creates it when it first starts.", theme::muted()))),
         _ if rows.is_empty() && flying.is_empty() && app.radar.paused.is_none() => {
-            let text = if app.radar.errors_only || app.radar.user.is_some() { "Nothing matches the filter." } else { "No requests recorded yet. They appear here as Claude Code is used." };
+            let text = if app.params.errors_only || app.params.feed_user.is_some() { "Nothing matches the filter." } else { "No requests recorded yet. They appear here as Claude Code is used." };
             lines.push(Line::from(Span::styled(text, theme::muted())));
         }
         _ => {}

@@ -38,10 +38,16 @@ fn built(relative: &str) -> PathBuf {
 
 /// The mock upstream and the service in manual sign-in mode, in a folder of their own.
 fn start(name: &str) -> Running {
+    start_with(name, |_| {})
+}
+
+/// As `start`, after `prepare` has had the empty folder.
+fn start_with(name: &str, prepare: impl FnOnce(&std::path::Path)) -> Running {
     let (public, admin, upstream) = (free_port(), free_port(), free_port());
     let root = std::env::temp_dir().join(format!("comptroller-tui-{name}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).unwrap();
+    prepare(&root);
     let config = root.join("comptroller.json");
     fs::write(&config, format!(
         r#"{{ "Proxy": {{ "ListenUrl": "http://localhost:{public}", "AdminPort": {admin}, "UpstreamUrl": "http://localhost:{upstream}" }},
@@ -77,6 +83,31 @@ fn preflight_passes_against_a_console_service() {
     }
     assert_eq!(checks.len(), 5);
     assert_eq!(checks[1].result.as_deref(), Ok("console"));
+}
+
+/// A database from schema version 2, before users had a seat plan, is upgraded when the
+/// service starts, keeping its people.
+#[test]
+fn an_older_database_is_upgraded() {
+    let service = start_with("upgrade", |root| {
+        fs::create_dir_all(root.join("data")).unwrap();
+        let c = rusqlite::Connection::open(root.join("data").join("comptroller.db")).unwrap();
+        c.execute_batch(
+            "CREATE TABLE schema_version (version INTEGER NOT NULL);
+             INSERT INTO schema_version VALUES (2);
+             CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+               source TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', created_utc TEXT NOT NULL);
+             INSERT INTO users (name, source, created_utc) VALUES ('Pat', 'manual', '2026-01-01T00:00:00.000Z');",
+        )
+        .unwrap();
+    });
+    let db = service.root.join("data").join("comptroller.db");
+
+    let listed = directory::load(&db).unwrap().unwrap();
+    assert_eq!(listed.users[0].name, "Pat");
+    assert_eq!(listed.users[0].seat_plan, None);
+    directory::set_seat_plan(&db, listed.users[0].id, Some("Team standard")).unwrap();
+    assert_eq!(directory::load(&db).unwrap().unwrap().users[0].seat_plan.as_deref(), Some("Team standard"));
 }
 
 /// A code made by the terminal connects a computer, and the terminal's suspend, resume and

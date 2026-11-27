@@ -17,8 +17,8 @@ Early development. **Not ready to roll out to a team.**
 | Running as a Windows Service, health endpoint | Works. There is no installer yet |
 | Tray app for developer computers | Works. There is no installer yet |
 | Recording each request with its token usage | Works against the fake upstream; not yet checked against the real API |
-| Admin terminal: install, start, stop, status, preflight test, settings, users, radar | Works |
-| Admin terminal: dashboard, cost view, black box, archives | Not built |
+| Admin terminal: install, start, stop, status, preflight test, settings, users, radar, dashboard, cost | Works |
+| Admin terminal: black box, archives and baseline | Not built |
 
 What has been tried against the real API is in [docs/testing-status.md](docs/testing-status.md).
 
@@ -39,6 +39,7 @@ Needs Windows, the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10
 
 ```powershell
 .\dev.ps1          # fake upstream: uses no seat
+.\dev.ps1 -Seed    # the same, after adding three weeks of traffic from four example people
 .\dev.ps1 -Real    # the real api.anthropic.com: uses your seat
 ```
 
@@ -56,12 +57,14 @@ Run the tests with `dotnet test service/Comptroller.slnx`.
 | - | - |
 | `i` | Install: writes the service to `%ProgramFiles%\claude-comptroller`, a default `comptroller.json` (an existing one is kept), registers the service (delayed automatic start, restart on crash, virtual account `NT SERVICE\claude-comptroller`), creates the data and log folders, starts it, and runs the preflight test |
 | `t` · `x` | Takeoff (start) and Terminate (stop; requests in flight finish first) |
+| `d` | Dashboard: the same cards as Radar for today or the last 7 or 14 days (`p`), requests per hour or day against the period before, each person's share with their plan-limit hits and p95, latency, and the latest requests |
+| `4` | Cost: what each person's seat costs against what their recorded tokens would cost at API list prices, for this billing month (`m`), the last 30 days (`3`) or the seat year (`y`), with a projection to the end of the period, a breakdown by model and the token mix. `s` edits the seat plans and their prices |
 | `r` | Radar: today's requests, slowest replies (p95), plan limits hit (429s) and errors, above a live feed of requests. Requests in flight show first. `f` picks a person, `e` shows only errors and plan limits, space pauses, enter shows one request |
 | `s` | Status: the service, the proxy and health checks, with the commands they read |
 | `p` | Preflight test: config, service, proxy, a request through to Anthropic, and that replies stream without buffering. It sends no credentials, so it uses no seat |
 | `u` | Uninstall: stops and removes the service; data, logs and config are kept unless you choose otherwise |
 | `c` | Settings: every value in `comptroller.json` with its default and limits. Changes are saved together with `s`; the old file is kept as `comptroller.json.bak`, and comments and anything else in the file are kept. Settings the service reads only at startup are marked, and saving one offers to restart the service |
-| `v` | Users: each person and the computers they connected, with status, requests today, last seen and token expiry. Suspend or resume a computer, revoke it, or remove it so it can connect again as new; revoke or remove a person. In `manual` mode, `n` creates a one-time code. Changes apply to the next request |
+| `v` | Users: each person and the computers they connected, with status, requests today, last seen and token expiry. `p` puts a person on a seat plan. Suspend or resume a computer, revoke it, or remove it so it can connect again as new; revoke or remove a person. In `manual` mode, `n` creates a one-time code. Changes apply to the next request |
 
 Installing, starting, stopping, saving settings and changing users need an administrator terminal; if it isn't one, it offers to reopen itself as administrator. Each step shows the `sc.exe`, `icacls` or `sqlite3` command that does the same by hand.
 
@@ -129,6 +132,10 @@ One file, `comptroller.json`. The admin terminal's Settings screen edits it; by 
 | `Data.Folder` | `data` | Database folder, relative to the config file |
 | `General.OrganizationName` | empty | Shown in the tray app |
 | `Logging.Folder` · `Level` · `RetainedFiles` · `FileSizeLimitMb` | `logs` · `Information` · 14 · 20 | Level: `Verbose` to `Fatal`. Files kept 1–365, size 1–1024 MB |
+
+The admin terminal also reads `Cost` (currency symbol, the day a billing month starts, the pricing file, and the seat plans with their billing period, price and renewal date) and `Dashboard` (refresh, and when latency and errors show as a warning). The service ignores both.
+
+**API prices** come from [contracts/pricing.json](contracts/pricing.json), copied from [Anthropic's pricing page](https://platform.claude.com/docs/en/about-claude/pricing) on the date it gives; the Cost screen warns when it's over 90 days old. To change them, save a copy as `pricing.json` beside `comptroller.json`. Models are matched by family and version (`claude-opus-5-5-20261001` is Opus 5.5); tokens on a model that isn't in the table are listed, not priced.
 
 In `manual` mode, create one-time codes on the admin terminal's Users screen (`v`, then `n`). Without the terminal, the service can print one:
 

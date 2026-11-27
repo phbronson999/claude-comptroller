@@ -40,6 +40,8 @@ pub struct User {
     pub source: String,
     pub revoked: bool,
     pub created: i64,
+    /// A name from Cost.SeatPlans, or none.
+    pub seat_plan: Option<String>,
     pub devices: Vec<Device>,
 }
 
@@ -114,7 +116,7 @@ fn read(db: &Path) -> Result<Directory, String> {
     let e = |e: rusqlite::Error| e.to_string();
 
     let mut users: Vec<User> = c
-        .prepare("SELECT id, name, source, status, created_utc FROM users")
+        .prepare("SELECT id, name, source, status, created_utc, seat_plan FROM users")
         .map_err(e)?
         .query_map([], |r| {
             Ok(User {
@@ -123,6 +125,7 @@ fn read(db: &Path) -> Result<Directory, String> {
                 source: r.get(2)?,
                 revoked: r.get::<_, String>(3)? == "revoked",
                 created: time(r.get(4)?).unwrap_or(0),
+                seat_plan: r.get(5)?,
                 devices: Vec::new(),
             })
         })
@@ -223,6 +226,14 @@ pub fn set_user_revoked(db: &Path, id: i64, revoked: bool) -> Result<usize, Stri
     let status = if revoked { "revoked" } else { "active" };
     change(db, format!("UPDATE users SET status = '{status}' WHERE id = {id}"), |c| {
         c.execute("UPDATE users SET status = ?1 WHERE id = ?2", params![status, id])
+    })
+}
+
+/// Puts a person on a seat plan, or none, for the Cost screen.
+pub fn set_seat_plan(db: &Path, id: i64, plan: Option<&str>) -> Result<usize, String> {
+    let shown = plan.map(sql_text).unwrap_or_else(|| "NULL".into());
+    change(db, format!("UPDATE users SET seat_plan = {shown} WHERE id = {id}"), |c| {
+        c.execute("UPDATE users SET seat_plan = ?1 WHERE id = ?2", params![plan, id])
     })
 }
 

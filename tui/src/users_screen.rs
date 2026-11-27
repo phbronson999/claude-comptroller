@@ -134,6 +134,7 @@ pub fn on_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char('s') => suspend_or_resume(app),
         KeyCode::Char('r') => ask(app, 'r'),
         KeyCode::Char('d') | KeyCode::Delete => ask(app, 'd'),
+        KeyCode::Char('p') => next_plan(app),
         KeyCode::Char('n') => {
             if app.snapshot.config_or_default().identity.mode != "manual" {
                 app.toast(ToastKind::Info, "One-time codes are for manual sign-in. In Windows mode people appear when they connect.");
@@ -183,6 +184,28 @@ fn suspend_or_resume(app: &mut App) {
         ("suspended", _) => run(app, "Changing users", format!("Resumed {name}."), |db| directory::resume_device(db, id)),
         _ => run(app, "Changing users", format!("Suspended {name}: its next request is refused."), |db| directory::suspend_device(db, id)),
     }
+}
+
+/// Puts the selected person on the next seat plan, then none, for the Cost screen.
+fn next_plan(app: &mut App) {
+    let plans: Vec<String> = app.snapshot.config_or_default().cost.seat_plans.into_iter().map(|p| p.name).collect();
+    let Some(d) = directory(app) else { return };
+    let rows = rows(d);
+    let Some(Row::User(user)) = rows.get(app.users.row) else {
+        return app.toast(ToastKind::Info, "Choose a person: p puts them on a seat plan.");
+    };
+    if plans.is_empty() {
+        return app.toast(ToastKind::Info, "No seat plans yet. Add them on the Cost screen (4 on the Terminal, then s).");
+    }
+    let at = user.seat_plan.as_ref().and_then(|p| plans.iter().position(|n| n == p)).map(|i| i + 1).unwrap_or(0);
+    let next = plans.get(at % (plans.len() + 1)).cloned();
+    let next = if at == plans.len() { None } else { next };
+    let (id, name) = (user.id, user.name.clone());
+    let done = match &next {
+        Some(plan) => format!("{name} is on {plan}."),
+        None => format!("{name} has no seat plan."),
+    };
+    run(app, "Changing users", done, |db| directory::set_seat_plan(db, id, next.as_deref()));
 }
 
 fn restore_user(app: &mut App) {
@@ -338,7 +361,12 @@ pub fn draw(f: &mut Frame, app: &App, body: Rect) {
                         let (status, color) = if u.revoked {
                             ("revoked".to_string(), theme::PINK)
                         } else {
-                            (format!("{} computer{}", u.devices.len(), if u.devices.len() == 1 { "" } else { "s" }), theme::MUTED)
+                            let computers = format!("{} computer{}", u.devices.len(), if u.devices.len() == 1 { "" } else { "s" });
+                            let text = match &u.seat_plan {
+                                Some(plan) => format!("{computers} · {plan}"),
+                                None => computers,
+                            };
+                            (truncate(&text, STATUS - 1), theme::MUTED)
                         };
                         let gap = NAME.saturating_sub(name.chars().count() + source.len() + 1);
                         spans.push(Span::styled(name, theme::bold(if u.revoked { theme::FAINT } else { theme::TEXT })));
@@ -412,7 +440,11 @@ fn draw_about(f: &mut Frame, app: &App, area: Rect, manual: bool, group: &str) {
 
     lines.push(section("SELECTED", None, width));
     let kv = |k: &str, v: String| Line::from(vec![Span::styled(format!("{k:<12}"), theme::faint()), Span::styled(v, theme::text())]);
-    let date = |t: i64| comptroller_admin::health::format_utc(t)[..10].to_string();
+    // Local date the way Windows shows it, and local time.
+    let date = |t: i64| {
+        let (y, m, d) = comptroller_admin::cost::civil((t + comptroller_admin::local_offset()).div_euclid(86_400));
+        comptroller_admin::dates::format(y, m, d)
+    };
     if let Some(d) = directory(app) {
         let rows = rows(d);
         match rows.get(app.users.row.min(rows.len().saturating_sub(1))) {
@@ -420,6 +452,7 @@ fn draw_about(f: &mut Frame, app: &App, area: Rect, manual: bool, group: &str) {
                 lines.push(kv("Person", u.name.clone()));
                 lines.push(kv("Added", format!("{} · {}", date(u.created), if u.source == "manual" { "by code" } else { "Windows sign-in" })));
                 lines.push(kv("Computers", u.devices.len().to_string()));
+                lines.push(kv("Seat plan", u.seat_plan.clone().unwrap_or_else(|| "none · p sets it".into())));
                 lines.push(Line::default());
                 lines.push(Line::from(Span::styled(
                     if u.revoked { "r restores them. del removes them and their computers." } else { "r revokes them on every computer. del removes them and their computers." },
@@ -432,7 +465,7 @@ fn draw_about(f: &mut Frame, app: &App, area: Rect, manual: bool, group: &str) {
                 lines.push(kv("Person", u.name.clone()));
                 lines.push(Line::from(vec![Span::styled(format!("{:<12}", "Status"), theme::faint()), Span::styled(status, theme::fg(color))]));
                 lines.push(kv("Connected", date(dev.created)));
-                lines.push(kv("Token ends", comptroller_admin::health::format_utc(dev.expires)[..16].replace('T', " ") + " UTC"));
+                lines.push(kv("Token ends", format!("{} {}", date(dev.expires), &comptroller_admin::local_clock(dev.expires)[..5])));
                 lines.push(Line::default());
                 lines.push(Line::from(Span::styled(
                     "s suspends or resumes it at once. r revokes it for good. del forgets it, so it can connect again as new.",

@@ -10,7 +10,10 @@ CREATE TABLE IF NOT EXISTS users (
     name        TEXT NOT NULL UNIQUE COLLATE NOCASE,            -- DOMAIN\user in windows mode
     source      TEXT NOT NULL CHECK (source IN ('windows', 'manual')),
     status      TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'revoked')),
-    created_utc TEXT NOT NULL
+    created_utc TEXT NOT NULL,
+    -- The seat plan they're on, by name from Cost.SeatPlans in comptroller.json (schema version 3).
+    -- The admin side sets it. Seat cost is counted from created_utc.
+    seat_plan   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS devices (

@@ -43,6 +43,8 @@ pub fn draw(f: &mut Frame, app: &App) {
         Screen::Settings => crate::settings_screen::draw(f, app, body),
         Screen::Users => crate::users_screen::draw(f, app, body),
         Screen::Radar => crate::radar_screen::draw(f, app, body),
+        Screen::Dashboard => crate::dashboard_screen::draw(f, app, body),
+        Screen::Cost => crate::cost_screen::draw(f, app, body),
     }
     draw_footer(f, app, footer);
     draw_toast(f, app, body);
@@ -152,6 +154,8 @@ fn description(app: &App, action: Action) -> (String, bool) {
         Action::Open(Screen::Status) => ("Service, config and connection health".into(), true),
         Action::Open(Screen::Preflight) => ("Send one request end to end".into(), true),
         Action::Open(Screen::Radar) => ("Live feed of requests".into(), true),
+        Action::Open(Screen::Dashboard) => ("Traffic, latency and plan limits by person".into(), true),
+        Action::Open(Screen::Cost) => ("Seats compared with API prices".into(), true),
         Action::Open(Screen::Settings) => ("Every configurable value".into(), true),
         Action::Open(Screen::Users) => ("People and the computers they connected".into(), true),
         Action::Open(Screen::Install) => match s.installed() {
@@ -629,7 +633,7 @@ fn draw_commands(f: &mut Frame, app: &App, area: Rect) {
                 Some(o) => ("✗".into(), theme::PINK, o.summary.clone()),
             };
             let repeats = match (entry.background, entry.repeats) {
-                (true, _) => format!(" ↻ every {} s", if app.screen == Screen::Radar { crate::app::RADAR_SECS } else { crate::app::POLL_SECS }),
+                (true, _) => format!(" ↻ every {} s", if matches!(app.screen, Screen::Radar | Screen::Dashboard) { app.live_secs() } else { crate::app::POLL_SECS }),
                 (false, n) if n > 1 => format!(" ×{n}"),
                 _ => String::new(),
             };
@@ -669,7 +673,20 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             Screen::Settings if app.settings.editing.is_some() => vec![("enter", "accept"), ("esc", "cancel"), ("←→", "move"), ("home end", "jump")],
             Screen::Settings => vec![("esc", "Terminal"), ("↑↓", "setting"), ("←→", "group"), ("enter", "edit"), ("z", "default"), ("u", "undo"), ("s", "save")],
             Screen::Users if app.users.typing() => vec![],
-            Screen::Users => vec![("esc", "Terminal"), ("↑↓", "move"), ("s", "suspend · resume"), ("r", "revoke"), ("del", "remove"), ("n", "new code")],
+            Screen::Users => vec![("esc", "Terminal"), ("↑↓", "move"), ("s", "suspend · resume"), ("r", "revoke"), ("del", "remove"), ("p", "seat plan"), ("n", "new code")],
+            Screen::Dashboard => vec![
+                ("esc", "Terminal"),
+                ("p", match app.params.days {
+                    1 => "period: today",
+                    7 => "period: 7 days",
+                    _ => "period: 14 days",
+                }),
+                ("1", "today"),
+                ("7", "7 days"),
+                ("r", "Radar"),
+            ],
+            Screen::Cost if app.cost.editing() => vec![],
+            Screen::Cost => vec![("esc", "Terminal"), ("m", "this month"), ("3", "30 days"), ("y", "seat year"), ("s", "seat plans")],
             Screen::Radar if app.radar.details => vec![("any key", "close")],
             Screen::Radar => vec![
                 ("esc", "Terminal"),
@@ -678,6 +695,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
                 ("e", "errors only"),
                 ("↑↓", "move"),
                 ("enter", "details"),
+                ("d", "Dashboard"),
             ],
             Screen::Terminal => vec![("↑↓", "move"), ("enter", "open"), ("s", "Status"), ("p", "Preflight"), ("t", "Takeoff"), ("x", "Terminate"), ("?", "help"), ("q", "quit")],
             Screen::Status => vec![("esc", "Terminal"), ("p", "Preflight test"), ("t", "Takeoff"), ("x", "Terminate"), ("l", "open logs"), ("r", "refresh")],

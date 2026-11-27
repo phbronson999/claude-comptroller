@@ -9,11 +9,31 @@ pub mod health;
 pub mod install;
 pub mod preflight;
 pub mod service;
+pub mod cost;
+pub mod dates;
+pub mod pricing;
 pub mod settings;
 pub mod traffic;
 
+/// Seconds to add to UTC for this computer's local time, now.
+pub fn local_offset() -> i64 {
+    // SAFETY: fills plain structs.
+    let (local, utc) = unsafe { (windows::Win32::System::SystemInformation::GetLocalTime(), windows::Win32::System::SystemInformation::GetSystemTime()) };
+    let secs = |t: &windows::Win32::Foundation::SYSTEMTIME| {
+        health::parse_utc(&format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond)).unwrap_or(0)
+    };
+    // Rounded to a quarter hour: the two readings can straddle a second.
+    ((secs(&local) - secs(&utc)) as f64 / 900.0).round() as i64 * 900
+}
+
+/// Local time of day, `HH:MM:SS`, for seconds since 1970.
+pub fn local_clock(utc: i64) -> String {
+    let t = (utc + local_offset()).rem_euclid(86_400);
+    format!("{:02}:{:02}:{:02}", t / 3600, t % 3600 / 60, t % 60)
+}
+
 /// The database schema version this build understands. Matches the service's.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Formats a duration in seconds as "3d 4h", "4h 12m" or "12m".
 pub fn short_duration(secs: u64) -> String {
