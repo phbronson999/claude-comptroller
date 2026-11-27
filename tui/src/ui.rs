@@ -159,9 +159,10 @@ fn description(app: &App, action: Action) -> (String, bool) {
         Action::Open(Screen::Cost) => ("Seats compared with API prices".into(), true),
         Action::Open(Screen::BlackBox) => (format!("The last {} days of recorded traffic", s.config_or_default().data.retention_days), true),
         Action::Open(Screen::Archives) => (
-            match s.config_or_default().archives.baseline.as_str() {
-                "" => "Save a range to keep it · no baseline yet".into(),
-                name => format!("Save a range to keep it · baseline {}", name.trim_end_matches(".db")),
+            if s.config_or_default().archives.baseline.trim().is_empty() {
+                "Save a range to keep it · no baseline yet".into()
+            } else {
+                "Save a range to keep it · baseline set".into()
             },
             true,
         ),

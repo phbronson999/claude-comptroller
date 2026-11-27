@@ -6,9 +6,11 @@ bin/
 obj/
 target/
 publish/
+dist/
 
 # Runtime data
 dev/sandbox/
+dev/downloads/
 data/
 logs/
 *.bak

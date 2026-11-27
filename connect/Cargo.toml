@@ -18,6 +18,10 @@ tauri = { version = "2", features = ["tray-icon", "image-ico", "image-png"] }
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Networking_WinHttp", "Win32_System_Threading", "Win32_Security", "Win32_System_SystemInformation"] }
 winreg = "0.56.0"
 
+[features]
+# Serves the UI from inside the exe, as the Tauri CLI does for a release. build.ps1 turns it on.
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 tauri-build = "2"
 

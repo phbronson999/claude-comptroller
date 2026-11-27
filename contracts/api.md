@@ -26,7 +26,7 @@ Errors use Anthropic's shape, so Claude Code shows the message:
 
 ## Endpoints
 
-Every `/_comptroller/` request must send `X-Comptroller-Client` (any value). Without it the answer is 400. This stops a web page from using the developer's Windows sign-in.
+Every `/_comptroller/` request must send `X-Comptroller-Client` (any value). Without it the answer is 400. This stops a web page from using the developer's Windows sign-in. The two download endpoints below are the exception: a browser opens them, and they carry no sign-in or user data.
 
 "Token" means the token header. "Windows" means Negotiate authentication, used when `Identity.Mode` is `windows`.
 
@@ -42,6 +42,13 @@ Every `/_comptroller/` request must send `X-Comptroller-Client` (any value). Wit
 | `POST /_comptroller/reconnect?device=NAME` | Windows (+ token) or, in manual mode, token | Reactivate a device the user disconnected |
 
 `GET /_comptroller/info` needs no sign-in: it tells a new client which mode the server uses.
+
+| Download endpoint | Auth | Purpose |
+| - | - | - |
+| `GET /_comptroller/download` | none, no client header | HTML setup page for developers: the tray app link with its size and SHA-256, the server address to enter, and the sign-in steps for this server's mode |
+| `GET /_comptroller/download/claude-comptroller-connect.exe` | none, no client header | The tray app, from the `downloads` folder beside `comptroller.json` (the admin terminal's Install puts it there). 404 with an error body when it isn't there |
+
+The address allow-list (`Access.AllowedCidrs`) applies to both.
 
 ### Session response
 

@@ -186,9 +186,21 @@ pub struct Report {
     pub people_without_plan: usize,
     /// For the seat year: the whole year's seat cost, and API cost at today's daily rate.
     pub projection: Option<(f64, f64)>,
+    /// The first local day in the range with a priced request: recording may have started
+    /// after the range did.
+    #[serde(default)]
+    pub first_recorded_day: Option<i64>,
 }
 
 impl Report {
+    /// Days in the range from the first recorded request, for averages per day.
+    pub fn recorded_days(&self) -> i64 {
+        match &self.range {
+            Some(r) => (r.last_day - self.first_recorded_day.unwrap_or(r.first_day).max(r.first_day) + 1).max(1),
+            None => 1,
+        }
+    }
+
     /// How many times cheaper the seats are than the API (above 1), or dearer (below 1).
     pub fn ratio(&self) -> Option<f64> {
         (self.seat > 0.0 && self.api > 0.0).then(|| self.api / self.seat)
@@ -242,7 +254,7 @@ fn build(db: &Path, cost: &CostConfig, pricing: &Pricing, range: Range, from_utc
     let mut statement = c
         .prepare(
             "SELECT COALESCE(user_name, ''), COALESCE(model, ''), COALESCE(input_tokens, 0), COALESCE(output_tokens, 0),
-                    COALESCE(cache_write_tokens, 0), cache_write_5m_tokens, cache_write_1h_tokens, COALESCE(cache_read_tokens, 0)
+                    COALESCE(cache_write_tokens, 0), cache_write_5m_tokens, cache_write_1h_tokens, COALESCE(cache_read_tokens, 0), started_utc
              FROM requests WHERE usage = 'parsed' AND started_utc >= ?1 AND started_utc < ?2",
         )
         .map_err(e)?;
@@ -259,11 +271,16 @@ fn build(db: &Path, cost: &CostConfig, pricing: &Pricing, range: Range, from_utc
                 r.get::<_, String>(0)?,
                 r.get::<_, String>(1)?,
                 Tokens { input: r.get(2)?, output: r.get(3)?, cache_write_5m, cache_write_1h, cache_read: r.get(7)? },
+                r.get::<_, String>(8)?,
             ))
         })
         .map_err(e)?;
     for row in rows {
-        let (user, model, tokens) = row.map_err(e)?;
+        let (user, model, tokens, started) = row.map_err(e)?;
+        if let Some(t) = crate::health::parse_utc(&started) {
+            let day = (t + offset).div_euclid(86_400);
+            report.first_recorded_day = Some(report.first_recorded_day.map_or(day, |d| d.min(day)));
+        }
         let person = people.entry(user.clone()).or_insert_with(|| PersonCost { name: user.clone(), ..Default::default() });
         person.tokens.add(&tokens);
         report.tokens.add(&tokens);
@@ -411,5 +428,7 @@ mod tests {
         assert_eq!(report.models.len(), 1);
         assert_eq!(report.tokens.total(), 2_001_000);
         assert!(report.ratio().is_some());
+        // Everything was recorded today, so a 30-day period averages over one day, not 30.
+        assert_eq!((report.first_recorded_day, report.recorded_days()), (Some(today), 1));
     }
 }

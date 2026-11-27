@@ -1,7 +1,7 @@
 // Fills the database with realistic traffic from several example people, so the Dashboard,
 // Radar, Cost and Users screens can be tried without waiting weeks for real use.
 //
-//   dotnet run --project tools/seed-db -- --config dev/comptroller.json [--days 21]
+//   dotnet run --project tools/seed-db -- --config dev/comptroller.json [--days 21] [--seat-plan "Team standard"]
 //
 // The people are EXAMPLE\maverick, EXAMPLE\goose, EXAMPLE\iceman and EXAMPLE\viper. Running it
 // again replaces everyone under EXAMPLE\ and their requests; nothing else in the database is touched. It creates the
@@ -20,6 +20,9 @@ if (configArg < 0 || configArg + 1 >= args.Length)
 var configPath = Path.GetFullPath(args[configArg + 1]);
 var daysArg = Array.IndexOf(args, "--days");
 var days = daysArg >= 0 && daysArg + 1 < args.Length ? int.Parse(args[daysArg + 1], CultureInfo.InvariantCulture) : 21;
+// Puts everyone seeded on this seat plan (a name from Cost.SeatPlans).
+var planArg = Array.IndexOf(args, "--seat-plan");
+var seatPlan = planArg >= 0 && planArg + 1 < args.Length ? args[planArg + 1] : null;
 
 // The data folder, relative to the config file, as the service resolves it.
 var dataFolder = "data";
@@ -84,10 +87,14 @@ var random = new Random(7);
 var now = DateTime.Now;
 var start = now.Date.AddDays(1 - days);
 var count = 0;
+// Requests are written in time order at the end, as the service would have recorded them,
+// so the newest rows are a mix of people rather than all the last person's.
+var queued = new List<(DateTime At, string Sql, (string Name, object? Value)[] Parameters)>();
+void Queue(DateTime at, string sql, params (string Name, object? Value)[] parameters) => queued.Add((at, sql, parameters));
 foreach (var person in people)
 {
-    Run("INSERT INTO users (name, source, created_utc) VALUES ($name, 'windows', $created)",
-        ("$name", person.Name), ("$created", Utc(start)));
+    Run("INSERT INTO users (name, source, created_utc, seat_plan) VALUES ($name, 'windows', $created, $plan)",
+        ("$name", person.Name), ("$created", Utc(start)), ("$plan", seatPlan));
     var userId = (long)Scalar("SELECT last_insert_rowid()")!;
     foreach (var device in person.Devices)
     {
@@ -116,7 +123,7 @@ foreach (var person in people)
             {
                 // Model lists and token counts: no usage.
                 var countTokens = roll < 0.03;
-                Run("""
+                Queue(at, """
                     INSERT INTO requests (started_utc, user_name, device_name, client_ip, method, path, status, duration_ms, request_bytes, response_bytes)
                     VALUES ($at, $user, $device, '10.0.0.20', $method, $path, 200, $ms, $in, $out)
                     """,
@@ -139,7 +146,7 @@ foreach (var person in people)
             var ms = limit ? random.Next(30, 120) : failure ? 600_000 : (int)(800 + output * (model == "claude-opus-5-5" ? 9.0 : 5.0) * (0.6 + random.NextDouble()));
             var status = limit ? 429 : failure ? 502 : 200;
             var parsed = status == 200 && !cancelled;
-            Run("""
+            Queue(at, """
                 INSERT INTO requests (started_utc, user_name, device_name, client_ip, method, path, status, duration_ms, request_bytes, response_bytes,
                     proxy_error, model, input_tokens, output_tokens, cache_write_tokens, cache_write_5m_tokens, cache_write_1h_tokens, cache_read_tokens, usage)
                 VALUES ($at, $user, $device, '10.0.0.20', 'POST', '/v1/messages', $status, $ms, $in, $out,
@@ -154,6 +161,11 @@ foreach (var person in people)
             count++;
         }
     }
+}
+
+foreach (var (_, sql, parameters) in queued.OrderBy(q => q.At))
+{
+    Run(sql, parameters);
 }
 
 transaction.Commit();
