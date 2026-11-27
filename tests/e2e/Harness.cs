@@ -18,12 +18,14 @@ public sealed class Harness : IAsyncLifetime
     private readonly List<Process> _processes = [];
     private readonly string _folder = Path.Combine(Path.GetTempPath(), "comptroller-e2e-" + Guid.NewGuid().ToString("N"));
     private readonly string _serviceUrl = $"http://localhost:{FreePort()}";
+    private readonly int _adminPort = FreePort();
 
     public string UpstreamUrl { get; } = $"http://localhost:{FreePort()}";
     public string ConfigPath => Path.Combine(_folder, "comptroller.json");
     public HttpClient Client { get; private set; } = null!;
     public HttpClient WindowsClient { get; private set; } = null!;
     public HttpClient Upstream { get; private set; } = null!;
+    public HttpClient Admin { get; private set; } = null!;
 
     public async Task InitializeAsync()
     {
@@ -31,11 +33,12 @@ public sealed class Harness : IAsyncLifetime
         Configure();
 
         Start("mock-anthropic", "--urls", UpstreamUrl, "--delay-ms", "100");
-        Start("Comptroller.Service", "--config", ConfigPath);
+        Start("claude-comptroller-service", "--config", ConfigPath);
 
         Client = new HttpClient { BaseAddress = new Uri(_serviceUrl) };
         WindowsClient = new HttpClient(new HttpClientHandler { UseDefaultCredentials = true }) { BaseAddress = new Uri(_serviceUrl) };
         Upstream = new HttpClient { BaseAddress = new Uri(UpstreamUrl) };
+        Admin = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{_adminPort}") };
 
         await WaitFor(() => Upstream.GetAsync("/v1/models"));
         await WaitFor(() => Client.SendAsync(new HttpRequestMessage(HttpMethod.Head, "/api/hello")));
@@ -60,7 +63,7 @@ public sealed class Harness : IAsyncLifetime
     {
         var config = JsonNode.Parse($$"""
             {
-              "Proxy": { "ListenUrl": "{{_serviceUrl}}", "UpstreamUrl": "{{UpstreamUrl}}" },
+              "Proxy": { "ListenUrl": "{{_serviceUrl}}", "UpstreamUrl": "{{UpstreamUrl}}", "AdminPort": {{_adminPort}} },
               "Access": { "AllowedCidrs": ["127.0.0.1/32", "::1/128"] },
               "Identity": { "Mode": "manual", "AllowedGroup": "{{EveryoneGroup}}" },
               "Data": { "Folder": "data" },
@@ -86,7 +89,7 @@ public sealed class Harness : IAsyncLifetime
 
     public string CreateCode(string user, string device)
     {
-        using var process = Process.Start(StartInfo("Comptroller.Service", redirect: true, "--config", ConfigPath, "--create-code", user, device))!;
+        using var process = Process.Start(StartInfo("claude-comptroller-service", redirect: true, "--config", ConfigPath, "--create-code", user, device))!;
         var output = process.StandardOutput.ReadToEnd();
         process.WaitForExit();
         Assert.Equal(0, process.ExitCode);
@@ -149,7 +152,7 @@ public sealed class Harness : IAsyncLifetime
         var root = here;
         while (!File.Exists(Path.Combine(root.FullName, "dev.ps1"))) root = root.Parent!;
 
-        var folder = project == "mock-anthropic" ? Path.Combine("tools", project) : Path.Combine("service", project);
+        var folder = project == "mock-anthropic" ? Path.Combine("tools", project) : Path.Combine("service", "Comptroller.Service");
         return Path.Combine(root.FullName, folder, "bin", configuration, framework, project + ".dll");
     }
 

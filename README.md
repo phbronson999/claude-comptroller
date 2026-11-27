@@ -14,7 +14,7 @@ Early development. **Not ready to roll out to a team.**
 | - | - |
 | Proxy to `api.anthropic.com` | Works |
 | Identity: Windows sign-in or one-time codes, device tokens, disconnect and reconnect | Works |
-| Running as a Windows Service, health endpoint | Not built |
+| Running as a Windows Service, health endpoint | Works. There is no installer yet |
 | Tray app for developer computers | Not built |
 | Admin terminal UI, usage recording, cost view, archives | Not built |
 
@@ -45,13 +45,33 @@ If you put these variables in a Claude Code or VS Code settings file instead, re
 
 Run the tests with `dotnet test service/Comptroller.slnx`.
 
+## Running as a Windows Service
+
+The service runs in a console or under Windows Service Control, and detects which. Publish it as one self-contained exe:
+
+```powershell
+dotnet publish service/Comptroller.Service -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish/service
+```
+
+Installing is a job for the admin UI, which isn't built yet. To check that the service works on a machine, run this in an administrator terminal. It installs a temporary service, tests it against the fake upstream and removes it:
+
+```powershell
+.\dev\service-test.ps1
+```
+
+While running, `http://127.0.0.1:8081/health` reports the version, uptime and whether the config file was accepted. It listens on the server itself only.
+
+Stopping waits for replies in flight, up to `Proxy.ShutdownTimeoutSeconds`.
+
 ## Configuration
 
-One file, `comptroller.json`. Start from [contracts/comptroller.sample.json](contracts/comptroller.sample.json) and pass it with `--config <path>`. Changes apply while running, except the listen URL, data folder and logging. An invalid file is ignored and the last good one stays in use.
+One file, `comptroller.json`. Start from [contracts/comptroller.sample.json](contracts/comptroller.sample.json) and pass it with `--config <path>`. Changes apply while running, except the listen URL, admin port, shutdown timeout, data folder and logging. An invalid file is ignored and the last good one stays in use.
 
 | Setting | Default | Meaning |
 | - | - | - |
 | `Proxy.ListenUrl` | `http://localhost:8080` | Where the service listens |
+| `Proxy.AdminPort` | 8081 | Port for `/health`, on `127.0.0.1` only |
+| `Proxy.ShutdownTimeoutSeconds` | 60 | How long a stop waits for replies in flight (5–600) |
 | `Proxy.UpstreamUrl` | `https://api.anthropic.com` | Where requests go |
 | `Proxy.ActivityTimeoutMinutes` | 10 | How long a silent request may last (1–60) |
 | `Proxy.StripForwardedHeaders` | true | Don't add `X-Forwarded-*` |

@@ -32,6 +32,7 @@ public sealed class ConfigStore : IOptionsMonitor<ComptrollerConfig>, IDisposabl
         _path = Path.GetFullPath(path);
         var (config, error) = Read(_path);
         _current = config ?? throw new InvalidOperationException($"Can't load {_path}: {error}");
+        LoadedUtc = DateTime.UtcNow;
 
         var name = Path.GetFileName(_path);
         _files = new PhysicalFileProvider(Path.GetDirectoryName(_path)!);
@@ -39,6 +40,11 @@ public sealed class ConfigStore : IOptionsMonitor<ComptrollerConfig>, IDisposabl
     }
 
     public ComptrollerConfig CurrentValue => _current;
+
+    public string FilePath => _path;
+
+    /// <summary>When the file was last read successfully.</summary>
+    public DateTime LoadedUtc { get; private set; }
 
     /// <summary>Why the file on disk was rejected, or null if the current config matches it.</summary>
     public string? LastError { get; private set; }
@@ -66,6 +72,7 @@ public sealed class ConfigStore : IOptionsMonitor<ComptrollerConfig>, IDisposabl
                 return;
             }
 
+            LoadedUtc = DateTime.UtcNow;
             if (config == _current) return;
             _current = config;
             Serilog.Log.Information("Config reloaded");

@@ -18,6 +18,10 @@ public sealed record ComptrollerConfig
         if (!IsHttpUrl(Proxy.ListenUrl)) errors.Add("Proxy.ListenUrl must be an http:// or https:// URL.");
         if (!IsHttpUrl(Proxy.UpstreamUrl)) errors.Add("Proxy.UpstreamUrl must be an http:// or https:// URL.");
         if (Proxy.ActivityTimeoutMinutes is < 1 or > 60) errors.Add("Proxy.ActivityTimeoutMinutes must be 1 to 60.");
+        if (Proxy.ShutdownTimeoutSeconds is < 5 or > 600) errors.Add("Proxy.ShutdownTimeoutSeconds must be 5 to 600.");
+        if (Proxy.AdminPort is < 1 or > 65535) errors.Add("Proxy.AdminPort must be a port number.");
+        else if (Uri.TryCreate(Proxy.ListenUrl, UriKind.Absolute, out var listen) && listen.Port == Proxy.AdminPort)
+            errors.Add("Proxy.AdminPort must differ from the port in Proxy.ListenUrl.");
 
         if (string.IsNullOrWhiteSpace(Logging?.Folder)) errors.Add("Logging.Folder must not be empty.");
         if (string.IsNullOrWhiteSpace(Data?.Folder)) errors.Add("Data.Folder must not be empty.");
@@ -48,6 +52,8 @@ public sealed record ProxyConfig
     public string ListenUrl { get; init; } = "http://localhost:8080";
     public string UpstreamUrl { get; init; } = "https://api.anthropic.com";
     public int ActivityTimeoutMinutes { get; init; } = 10;
+    public int AdminPort { get; init; } = 8081;
+    public int ShutdownTimeoutSeconds { get; init; } = 60;
     public bool StripForwardedHeaders { get; init; } = true;
 }
 

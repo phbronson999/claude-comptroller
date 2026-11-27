@@ -1,8 +1,10 @@
 {
   "Proxy": {
     "ListenUrl": "http://localhost:8080",
+    "AdminPort": 8081,
     "UpstreamUrl": "http://localhost:5055",
     "ActivityTimeoutMinutes": 10,
+    "ShutdownTimeoutSeconds": 60,
     "StripForwardedHeaders": true
   },
   "Access": {

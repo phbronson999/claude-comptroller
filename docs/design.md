@@ -27,6 +27,7 @@ People use multiple computers, so identity is **user + device**.
 ## Service (C#)
 
 - **Stack:** .NET 10 (LTS; pin Microsoft packages to 10.x, since `dotnet add` picks 11), ASP.NET Core, **YARP** (`Yarp.ReverseProxy`, github.com/dotnet/yarp; use the latest stable), `Microsoft.AspNetCore.Authentication.Negotiate`, `Microsoft.Extensions.Hosting.WindowsServices`, `Microsoft.Data.Sqlite`, Serilog writing compact JSON to a rolling file.
+- **Service account:** the virtual account `NT SERVICE\<service name>`, never `LocalSystem`. It needs write access to the log and data folders, and the data folder is restricted to it, Administrators and SYSTEM. Verified with Windows sign-in in step 3; `dev/service-test.ps1` shows the commands.
 - **Publish command:**
   ```
   dotnet publish -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
@@ -169,6 +170,7 @@ Rule: **nothing operational or company-specific is hard-coded.**
 | Proxy | Admin (health) port | 8081 | 127.0.0.1 only; restart |
 | Proxy | Upstream URL | `https://api.anthropic.com` | locked behind a confirm |
 | Proxy | Activity timeout | 10 min | 1–60 |
+| Proxy | Shutdown timeout | 60 s | 5–600; how long a stop waits for replies in flight; restart |
 | Proxy | Strip X-Forwarded headers | on | |
 | Access | Allowed client CIDRs | `127.0.0.1/32`, `::1/128` | outer fence; warn if empty |
 | TLS | Certificate (store thumbprint or .pfx) | none | restart |

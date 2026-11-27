@@ -1,6 +1,8 @@
 # HTTP contract
 
-Everything under `/_comptroller/` belongs to the service and is never forwarded. All other paths are proxied to the upstream.
+The service has two listeners: the public one (`Proxy.ListenUrl`) and the admin one (`127.0.0.1:Proxy.AdminPort`).
+
+On the public listener, everything under `/_comptroller/` belongs to the service and is never forwarded. All other paths are proxied to the upstream.
 
 ## Proxy checks
 
@@ -69,3 +71,24 @@ In manual mode an expired token can't be refreshed; the admin issues a new code.
 ### Errors
 
 Same shape as the proxy errors. 400 bad request, 401 not signed in or unknown token, 403 not allowed, 404 unknown endpoint.
+
+## Health
+
+`GET /health` on the admin listener only, with no authentication. Everything else there is 404. On the public listener `/health` is an ordinary proxied path.
+
+```json
+{
+  "version": "0.1.0",
+  "startedUtc": "2026-11-27T09:00:00.000Z",
+  "uptimeSeconds": 273600,
+  "windowsService": true,
+  "config": { "status": "ok", "error": null, "path": "C:\\…\\comptroller.json", "loadedUtc": "2026-11-27T09:00:00.000Z" },
+  "schemaVersion": 1,
+  "listenUrl": "http://localhost:8080",
+  "upstreamUrl": "https://api.anthropic.com"
+}
+```
+
+- `config.status` is `error` when the file on disk was rejected. `error` says why, and the last good config stays in use.
+- `listenUrl` is what the service is listening on now. If the file says something else, a restart is needed.
+- `windowsService` is false for a console run.
