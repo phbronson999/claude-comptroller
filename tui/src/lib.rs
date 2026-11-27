@@ -10,9 +10,10 @@ pub mod install;
 pub mod preflight;
 pub mod service;
 pub mod settings;
+pub mod traffic;
 
 /// The database schema version this build understands. Matches the service's.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Formats a duration in seconds as "3d 4h", "4h 12m" or "12m".
 pub fn short_duration(secs: u64) -> String {

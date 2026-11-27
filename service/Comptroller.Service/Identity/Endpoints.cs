@@ -63,11 +63,12 @@ public static class Endpoints
             }
         });
 
-        group.MapGet("/me", (HttpContext context) =>
+        group.MapGet("/me", (HttpContext context, Recording.RequestLog log) =>
         {
             if (DeviceFromToken(context, options.CurrentValue.Identity, store) is not { } device)
                 return ApiErrors.Result(401, ApiErrors.NotConnected);
 
+            var (requests, limitHits, lastUtc) = log.Today(device.User, device.Name);
             return Results.Json(new
             {
                 user = device.User,
@@ -76,8 +77,8 @@ public static class Endpoints
                 suspendedBy = device.SuspendedBy,
                 expired = device.Expired,
                 expiresUtc = IdentityStore.Format(device.ExpiresUtc),
-                // Filled in once requests are recorded.
-                today = new { requests = (int?)null, limitHits = (int?)null, lastRequestUtc = (string?)null },
+                // This computer, since midnight on the server.
+                today = new { requests, limitHits, lastRequestUtc = lastUtc },
             });
         });
 

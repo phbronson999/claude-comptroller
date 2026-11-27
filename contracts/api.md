@@ -72,11 +72,11 @@ In manual mode an expired token can't be refreshed; the admin issues a new code.
   "user": "CORP\\jdoe", "device": "LAPTOP-1",
   "status": "active", "suspendedBy": null, "expired": false,
   "expiresUtc": "2026-12-04T09:00:00.000Z",
-  "today": { "requests": null, "limitHits": null, "lastRequestUtc": null }
+  "today": { "requests": 12, "limitHits": 1, "lastRequestUtc": "2026-11-27T14:02:11.120Z" }
 }
 ```
 
-`today` holds nulls until requests are recorded (build step 7).
+`today` counts this computer's requests since midnight on the server. `limitHits` is how many were answered 429, which on a subscription seat usually means a plan limit. `lastRequestUtc` is null before the first one.
 
 `status` is `active`, `suspended` or `revoked`. A revoked user reports `revoked`.
 
@@ -95,11 +95,21 @@ Same shape as the proxy errors. 400 bad request, 401 not signed in or unknown to
   "uptimeSeconds": 273600,
   "windowsService": true,
   "config": { "status": "ok", "error": null, "path": "C:\\…\\comptroller.json", "loadedUtc": "2026-11-27T09:00:00.000Z" },
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "listenUrl": "http://localhost:8080",
-  "upstreamUrl": "https://api.anthropic.com"
+  "upstreamUrl": "https://api.anthropic.com",
+  "inFlight": {
+    "count": 1,
+    "requests": [
+      { "user": "CORP\\jdoe", "device": "LAPTOP-1", "method": "POST", "path": "/v1/messages", "startedUtc": "2026-11-30T09:12:04.512Z" }
+    ]
+  },
+  "recording": { "queued": 0, "dropped": 0, "error": null }
 }
 ```
+
+- `inFlight` lists up to 50 requests being forwarded now, oldest first. `count` is all of them.
+- `recording.queued` is finished requests waiting to be written to the database, `dropped` how many were never written because the database fell far behind, and `error` the last write failure, if any.
 
 - `config.status` is `error` when the file on disk was rejected. `error` says why, and the last good config stays in use.
 - `listenUrl` is what the service is listening on now. If the file says something else, a restart is needed.

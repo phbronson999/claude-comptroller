@@ -4,7 +4,8 @@
 //   --delay-ms 150                 pause between streamed events
 //   --status 429                   make every /v1/* call fail with this status
 //
-// A single request can also ask for a failure with the header "x-mock-status: 529".
+// A single request can also ask for a failure with the header "x-mock-status: 529",
+// or a gzip-compressed reply with "x-mock-encoding: gzip".
 // GET /_mock/requests returns the headers of recent requests; DELETE clears them.
 using System.Collections.Concurrent;
 using System.Text.Json;
@@ -58,6 +59,24 @@ app.Use(async (context, next) =>
             type = "error",
             error = new { type, message = $"Mock {status} from mock-anthropic." },
         });
+        return;
+    }
+
+    // "x-mock-encoding: gzip" compresses the reply, as a real server may.
+    if (request.Headers["x-mock-encoding"] == "gzip")
+    {
+        var original = context.Response.Body;
+        await using var gzip = new System.IO.Compression.GZipStream(original, System.IO.Compression.CompressionLevel.Fastest, leaveOpen: true);
+        context.Response.Headers.ContentEncoding = "gzip";
+        context.Response.Body = gzip;
+        try
+        {
+            await next();
+        }
+        finally
+        {
+            context.Response.Body = original;
+        }
         return;
     }
 

@@ -69,7 +69,7 @@ fn sql_text(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
-fn open(db: &Path, flags: OpenFlags) -> Result<Connection, String> {
+pub(crate) fn open(db: &Path, flags: OpenFlags) -> Result<Connection, String> {
     let connection = Connection::open_with_flags(db, flags | OpenFlags::SQLITE_OPEN_NO_MUTEX).map_err(|e| match e {
         rusqlite::Error::SqliteFailure(f, _) if f.code == rusqlite::ErrorCode::CannotOpen => {
             format!("Can't open {}. It needs an administrator terminal.", db.display())

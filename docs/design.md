@@ -52,7 +52,11 @@ People use multiple computers, so identity is **user + device**.
     - Only the `usage` and `model` fields are parsed. Content is never stored or logged.
     - Skip `/v1/messages/count_tokens`.
     - If the usage can't be parsed, record nulls and count it on Status. Never fail the request.
-  - Rows go through a `Channel<T>` to a background batch writer, so a request never waits on SQLite.
+  - Rows go through a `Channel<T>` to a background batch writer, so a request never waits on SQLite. If the database falls far behind, the oldest queued rows are dropped and counted on `/health`, rather than slowing the proxy.
+  - Requests refused by the token check (401, 403) and the service's own `/_comptroller/*` calls aren't recorded; the hello probe is, with no user.
+  - Compressed replies are read from a copy (capped at 16 MB) once they finish; plain streamed replies are read line by line.
+  - Requests in flight aren't in the database until they finish. `/health` lists them, for Radar's live rows and Terminate's count.
+  - "Today" is the server's local day, for `/me` and the admin terminal alike.
 - **SQLite:**
   - `data/comptroller.db`, with WAL and `auto_vacuum=INCREMENTAL`.
   - Tables: `requests`, `users`, `devices`, `schema_version`.

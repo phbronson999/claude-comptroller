@@ -42,6 +42,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         Screen::Install | Screen::Uninstall => draw_steps(f, app, body),
         Screen::Settings => crate::settings_screen::draw(f, app, body),
         Screen::Users => crate::users_screen::draw(f, app, body),
+        Screen::Radar => crate::radar_screen::draw(f, app, body),
     }
     draw_footer(f, app, footer);
     draw_toast(f, app, body);
@@ -150,6 +151,7 @@ fn description(app: &App, action: Action) -> (String, bool) {
         Action::Later(step) => (format!("Arrives in build step {step}"), false),
         Action::Open(Screen::Status) => ("Service, config and connection health".into(), true),
         Action::Open(Screen::Preflight) => ("Send one request end to end".into(), true),
+        Action::Open(Screen::Radar) => ("Live feed of requests".into(), true),
         Action::Open(Screen::Settings) => ("Every configurable value".into(), true),
         Action::Open(Screen::Users) => ("People and the computers they connected".into(), true),
         Action::Open(Screen::Install) => match s.installed() {
@@ -206,7 +208,11 @@ fn draw_terminal(f: &mut Frame, app: &App, body: Rect) {
     // The radar scope above "At a glance", when there's room for both.
     let side = if side.width >= logo::MIN_WIDTH && side.height >= logo::ROWS + 14 {
         let [top, rest] = Layout::vertical([Constraint::Length(logo::ROWS), Constraint::Fill(1)]).spacing(1).areas(side);
-        logo::draw(f, top, beam(app), app.tick);
+        let blips: Vec<logo::Blip> = match &app.snapshot.today {
+            Some(Ok(Some(t))) => t.active.iter().map(|(user, device, hit)| logo::Blip { key: format!("{user}\n{device}"), limit_hit: *hit }).collect(),
+            _ => Vec::new(),
+        };
+        logo::draw(f, top, beam(app), app.tick, &blips);
         rest
     } else {
         side
@@ -251,6 +257,22 @@ fn draw_glance(f: &mut Frame, app: &App, area: Rect) {
         })),
         kv("Black box", w, plain(s.db_size.map(bytes).unwrap_or_else(|| "empty".into()))),
         kv("Config", w, config_line),
+        kv("Today", w, match &s.today {
+            Some(Ok(Some(t))) if t.requests > 0 => {
+                let mut spans = plain(format!("{} requests", t.requests));
+                if let Some((at, user)) = &t.last {
+                    spans.push(Span::styled(
+                        format!(" · last {} · {}", ago(health::now() - at), crate::radar_screen::short_name(user)),
+                        theme::muted(),
+                    ));
+                }
+                spans
+            }
+            Some(Ok(_)) => colored("no requests yet", theme::FAINT),
+            Some(Err(_)) if !app.elevated => colored("needs an administrator terminal", theme::FAINT),
+            Some(Err(e)) => colored(e.clone(), theme::ORANGE),
+            None => plain("—"),
+        }),
         Line::default(),
         section("NEED TO KNOW", None, width),
     ];
@@ -268,6 +290,19 @@ fn draw_glance(f: &mut Frame, app: &App, area: Rect) {
     if let Some(h) = &s.health {
         if h.schema_version != SCHEMA_VERSION {
             notes.push((theme::ORANGE, format!("Database schema {} but this terminal expects {SCHEMA_VERSION}. Update both together.", h.schema_version)));
+        }
+    }
+    if let Some(Ok(Some(t))) = &s.today {
+        for (user, hits) in t.limit_hits_by_user.iter().take(3) {
+            let times = if *hits == 1 { "once".to_string() } else { format!("{hits} times") };
+            notes.push((theme::ORANGE, format!("{} hit a plan limit {times} today.", crate::radar_screen::short_name(user))));
+        }
+    }
+    if let Some(h) = &s.health {
+        if let Some(e) = &h.recording.error {
+            notes.push((theme::PINK, format!("Requests aren't being recorded: {e}")));
+        } else if h.recording.dropped > 0 {
+            notes.push((theme::ORANGE, format!("{} requests weren't recorded because the database fell behind.", h.recording.dropped)));
         }
     }
     if let Some((labels, _)) = &app.restart_waiting {
@@ -388,6 +423,18 @@ fn draw_status(f: &mut Frame, app: &App, body: Rect) {
         "Black box size",
         s.db_size.map(bytes).unwrap_or_else(|| "no database yet".into()),
     ));
+    lines.push(match &s.health {
+        Some(h) if h.recording.error.is_some() => check(Some(false), "Recording", h.recording.error.clone().unwrap_or_default()),
+        Some(h) if h.recording.dropped > 0 => check(Some(false), "Recording", format!("{} requests dropped: the database fell behind", h.recording.dropped)),
+        Some(h) => check(Some(true), "Recording", format!("{} in flight · {} waiting to be written", h.in_flight.count, h.recording.queued)),
+        None => check(None, "Recording", "service not answering".into()),
+    });
+    lines.push(match &s.today {
+        Some(Ok(Some(t))) if t.usage_missing > 0 => check(Some(false), "Token usage read", format!("{} replies today couldn't be read", t.usage_missing)),
+        Some(Ok(Some(_))) => check(Some(true), "Token usage read", "every reply today".into()),
+        Some(Err(_)) => check(None, "Token usage read", "needs an administrator terminal".into()),
+        _ => check(None, "Token usage read", "nothing recorded yet".into()),
+    });
     lines.push(Line::default());
     lines.push(section("UNDER THE HOOD", None, width));
     lines.push(Line::from(Span::styled("This screen reads:", theme::faint())));
@@ -582,7 +629,7 @@ fn draw_commands(f: &mut Frame, app: &App, area: Rect) {
                 Some(o) => ("✗".into(), theme::PINK, o.summary.clone()),
             };
             let repeats = match (entry.background, entry.repeats) {
-                (true, _) => format!(" ↻ every {} s", crate::app::POLL_SECS),
+                (true, _) => format!(" ↻ every {} s", if app.screen == Screen::Radar { crate::app::RADAR_SECS } else { crate::app::POLL_SECS }),
                 (false, n) if n > 1 => format!(" ×{n}"),
                 _ => String::new(),
             };
@@ -623,6 +670,15 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             Screen::Settings => vec![("esc", "Terminal"), ("↑↓", "setting"), ("←→", "group"), ("enter", "edit"), ("z", "default"), ("u", "undo"), ("s", "save")],
             Screen::Users if app.users.typing() => vec![],
             Screen::Users => vec![("esc", "Terminal"), ("↑↓", "move"), ("s", "suspend · resume"), ("r", "revoke"), ("del", "remove"), ("n", "new code")],
+            Screen::Radar if app.radar.details => vec![("any key", "close")],
+            Screen::Radar => vec![
+                ("esc", "Terminal"),
+                ("space", if app.radar.paused.is_some() { "resume" } else { "pause" }),
+                ("f", "person"),
+                ("e", "errors only"),
+                ("↑↓", "move"),
+                ("enter", "details"),
+            ],
             Screen::Terminal => vec![("↑↓", "move"), ("enter", "open"), ("s", "Status"), ("p", "Preflight"), ("t", "Takeoff"), ("x", "Terminate"), ("?", "help"), ("q", "quit")],
             Screen::Status => vec![("esc", "Terminal"), ("p", "Preflight test"), ("t", "Takeoff"), ("x", "Terminate"), ("l", "open logs"), ("r", "refresh")],
             Screen::Preflight => vec![("esc", "Terminal"), ("enter", "run again"), ("s", "Status")],
@@ -673,8 +729,16 @@ fn draw_confirm(f: &mut Frame, app: &App, confirm: &Confirm, screen: Rect) {
                 Line::from(Span::styled(format!("Stop the {name} service?"), theme::text())),
                 Line::default(),
                 Line::from(vec![
-                    Span::styled("Requests in flight", theme::fg(theme::ORANGE)),
-                    Span::styled(format!(" finish first (up to {} s). ", config.proxy.shutdown_timeout_seconds), theme::muted()),
+                    Span::styled(
+                        match app.snapshot.health.as_ref().map(|h| h.in_flight.count) {
+                            Some(0) => "No requests are in flight".to_string(),
+                            Some(1) => "1 request in flight finishes first".to_string(),
+                            Some(n) => format!("{n} requests in flight finish first"),
+                            None => "Requests in flight finish first".to_string(),
+                        },
+                        theme::fg(theme::ORANGE),
+                    ),
+                    Span::styled(format!(" (waiting up to {} s). ", config.proxy.shutdown_timeout_seconds), theme::muted()),
                 ]),
                 Line::from(Span::styled("Until Takeoff, Claude Code on every developer computer will fail to connect.", theme::muted())),
                 Line::default(),

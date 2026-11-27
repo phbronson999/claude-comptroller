@@ -132,6 +132,37 @@ public sealed class Harness : IAsyncLifetime
         command.ExecuteNonQuery();
     }
 
+    /// <summary>Reads rows from the database as the admin side would.</summary>
+    public List<Dictionary<string, object?>> Rows(string sql, params (string Name, object Value)[] parameters)
+    {
+        using var connection = new SqliteConnection($"Data Source={Path.Combine(_folder, "data", "comptroller.db")};Mode=ReadOnly");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        foreach (var (name, value) in parameters) command.Parameters.AddWithValue(name, value);
+        using var reader = command.ExecuteReader();
+        var rows = new List<Dictionary<string, object?>>();
+        while (reader.Read())
+        {
+            rows.Add(Enumerable.Range(0, reader.FieldCount).ToDictionary(reader.GetName, i => reader.IsDBNull(i) ? null : reader.GetValue(i)));
+        }
+
+        return rows;
+    }
+
+    /// <summary>The requests recorded for a device, waiting for the background writer to catch up.</summary>
+    public async Task<List<Dictionary<string, object?>>> Recorded(string device, int count)
+    {
+        for (var i = 0; i < 50; i++)
+        {
+            var rows = Rows("SELECT * FROM requests WHERE device_name = $device ORDER BY id", ("$device", device));
+            if (rows.Count >= count) return rows;
+            await Task.Delay(100);
+        }
+
+        throw new TimeoutException($"Fewer than {count} requests recorded for {device}.");
+    }
+
     private void Start(string project, params string[] args) =>
         _processes.Add(Process.Start(StartInfo(project, redirect: false, args))!);
 

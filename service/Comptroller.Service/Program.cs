@@ -3,6 +3,7 @@ using Comptroller.Service;
 using Comptroller.Service.Config;
 using Comptroller.Service.Identity;
 using Comptroller.Service.Proxy;
+using Comptroller.Service.Recording;
 using Microsoft.AspNetCore.Authentication.Negotiate;
 using Microsoft.Extensions.Hosting.WindowsServices;
 using Microsoft.Extensions.Options;
@@ -92,6 +93,10 @@ try
     builder.Services.Configure<HostOptions>(host => host.ShutdownTimeout = TimeSpan.FromSeconds(config.Proxy.ShutdownTimeoutSeconds));
     builder.Services.AddSerilog();
     builder.Services.AddSingleton(identityStore);
+    var requestLog = new RequestLog(databasePath);
+    builder.Services.AddSingleton(requestLog);
+    builder.Services.AddHostedService(_ => requestLog);
+    builder.Services.AddSingleton<InFlight>();
     builder.Services.AddAuthentication(NegotiateDefaults.AuthenticationScheme).AddNegotiate();
     builder.Services.AddAuthorization();
     builder.Services.AddSingleton<IOptionsMonitor<ComptrollerConfig>>(store);
@@ -138,6 +143,7 @@ try
     app.UseAllowedAddresses();
     app.UseAuthentication();
     app.UseDeviceTokens();
+    app.UseRecording();
 
     app.MapComptrollerEndpoints();
     app.MapReverseProxy();

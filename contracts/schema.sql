@@ -27,6 +27,36 @@ CREATE TABLE IF NOT EXISTS devices (
     UNIQUE (user_id, name)
 );
 
+-- One row per proxied request (schema version 2). Metadata only: never a prompt or a reply.
+-- The service writes; the admin side reads.
+CREATE TABLE IF NOT EXISTS requests (
+    id                    INTEGER PRIMARY KEY,
+    started_utc           TEXT NOT NULL,
+    user_name             TEXT,               -- as signed in at the time; NULL for the hello probe
+    device_name           TEXT,
+    client_ip             TEXT,
+    method                TEXT NOT NULL,
+    path                  TEXT NOT NULL,      -- without the query string
+    status                INTEGER NOT NULL,
+    duration_ms           INTEGER NOT NULL,
+    request_bytes         INTEGER,            -- NULL when the client didn't say
+    response_bytes        INTEGER NOT NULL,
+    -- Why the proxy got no complete reply, as YARP names it (RequestTimedOut, RequestCanceled, …).
+    proxy_error           TEXT,
+    model                 TEXT,
+    input_tokens          INTEGER,
+    output_tokens         INTEGER,
+    cache_write_tokens    INTEGER,            -- cache_creation_input_tokens
+    cache_write_5m_tokens INTEGER,            -- split by cache lifetime, when the reply gives it
+    cache_write_1h_tokens INTEGER,
+    cache_read_tokens     INTEGER,
+    -- 'parsed', or 'missing' when a reply should have had usage but it couldn't be read.
+    -- NULL when none was expected (not POST /v1/messages, or not a 200).
+    usage                 TEXT CHECK (usage IN ('parsed', 'missing'))
+);
+CREATE INDEX IF NOT EXISTS requests_by_time ON requests (started_utc);
+CREATE INDEX IF NOT EXISTS requests_by_device ON requests (user_name, device_name, started_utc);
+
 -- One-time codes for manual identity mode. The admin side inserts, the service redeems.
 CREATE TABLE IF NOT EXISTS enrollment_codes (
     code_hash   TEXT PRIMARY KEY,                               -- SHA-256 of the code, upper-case, no dashes

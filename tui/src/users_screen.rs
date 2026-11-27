@@ -279,6 +279,7 @@ fn seen(time: Option<i64>) -> String {
 const NAME: usize = 30;
 const STATUS: usize = 24;
 const SEEN: usize = 12;
+const TODAY: usize = 6;
 
 pub fn draw(f: &mut Frame, app: &App, body: Rect) {
     let [left, right] = Layout::horizontal([Constraint::Percentage(62), Constraint::Percentage(38)]).spacing(1).areas(body);
@@ -309,7 +310,18 @@ pub fn draw(f: &mut Frame, app: &App, body: Rect) {
             )));
         }
         Some(Ok(Some(d))) => {
-            lines.push(Line::from(Span::styled(format!("  {:<NAME$}{:<STATUS$}{:<SEEN$}{}", "PERSON · COMPUTER", "STATUS", "LAST SEEN", "TOKEN"), theme::label())));
+            lines.push(Line::from(Span::styled(
+                format!("  {:<NAME$}{:<STATUS$}{:>TODAY$}  {:<SEEN$}{}", "PERSON · COMPUTER", "STATUS", "TODAY", "LAST SEEN", "TOKEN"),
+                theme::label(),
+            )));
+            let today = match &app.snapshot.today {
+                Some(Ok(Some(t))) => Some(t),
+                _ => None,
+            };
+            let count = |n: Option<&i64>| match (today, n) {
+                (None, _) => format!("{:>TODAY$}  ", "—"),
+                (Some(_), n) => format!("{:>TODAY$}  ", n.copied().unwrap_or(0)),
+            };
             let selected_row = app.users.row.min(rows(d).len().saturating_sub(1));
             let mut codes_heading = false;
             for (index, row) in rows(d).into_iter().enumerate() {
@@ -332,6 +344,7 @@ pub fn draw(f: &mut Frame, app: &App, body: Rect) {
                         spans.push(Span::styled(name, theme::bold(if u.revoked { theme::FAINT } else { theme::TEXT })));
                         spans.push(Span::styled(format!(" {source}{}", " ".repeat(gap)), theme::faint()));
                         spans.push(Span::styled(format!("{status:<STATUS$}"), theme::fg(color)));
+                        spans.push(Span::styled(count(today.and_then(|t| t.by_user.get(&u.name))), theme::text()));
                         spans.push(Span::styled(seen(u.last_seen()), theme::muted()));
                     }
                     Row::Device(u, dev) => {
@@ -341,6 +354,7 @@ pub fn draw(f: &mut Frame, app: &App, body: Rect) {
                         spans.push(Span::styled("└ ", theme::faint()));
                         spans.push(Span::styled(format!("{name:<0$}", NAME - 2), theme::text()));
                         spans.push(Span::styled(format!("{status:<STATUS$}"), theme::fg(color)));
+                        spans.push(Span::styled(count(today.and_then(|t| t.by_device.get(&(u.name.clone(), dev.name.clone())))), theme::muted()));
                         spans.push(Span::styled(format!("{:<SEEN$}", seen(dev.last_seen)), theme::muted()));
                         spans.push(Span::styled(token, theme::faint()));
                     }
@@ -353,6 +367,7 @@ pub fn draw(f: &mut Frame, app: &App, body: Rect) {
                         let name = truncate(&format!("{} · {}", c.user, c.device), NAME - 2);
                         spans.push(Span::styled(format!("{name:<NAME$}"), theme::text()));
                         spans.push(Span::styled(format!("{:<STATUS$}", "waiting"), theme::fg(theme::ACCENT)));
+                        spans.push(Span::raw(" ".repeat(TODAY + 2)));
                         spans.push(Span::styled(format!("{:<SEEN$}", ago(now() - c.created)), theme::muted()));
                         spans.push(Span::styled(format!("{} left", short_duration((c.expires - now()).max(0) as u64)), theme::faint()));
                     }
@@ -435,7 +450,7 @@ fn draw_about(f: &mut Frame, app: &App, area: Rect, manual: bool, group: &str) {
     }
     lines.push(Line::default());
     lines.push(Line::from(Span::styled("Changes apply to the next request. No restart needed.", theme::faint())));
-    lines.push(Line::from(Span::styled("Requests per person arrive with recording (step 7).", theme::faint())));
+    lines.push(Line::from(Span::styled("TODAY counts requests since midnight. Radar (r on the Terminal) shows each one.", theme::faint())));
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(block), area);
 }
 
