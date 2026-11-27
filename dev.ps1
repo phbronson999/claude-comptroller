@@ -28,9 +28,10 @@ try {
 
     Write-Host ''
     Write-Host "Upstream: $(if ($Real) { 'api.anthropic.com (REAL, uses your seat)' } else { 'mock on http://localhost:5055' })"
-    Write-Host 'To send Claude Code through it, in a NEW terminal:'
+    Write-Host 'To send Claude Code through it, in a NEW terminal (signs you in with Windows first):'
+    Write-Host '  $s = irm "http://localhost:8080/_comptroller/connect?device=dev-laptop" -UseDefaultCredentials -Headers @{"X-Comptroller-Client"="dev"}'
     Write-Host '  $env:ANTHROPIC_BASE_URL = "http://localhost:8080"'
-    Write-Host '  $env:ANTHROPIC_CUSTOM_HEADERS = "X-Comptroller-Token: dev-test"'
+    Write-Host '  $env:ANTHROPIC_CUSTOM_HEADERS = "X-Comptroller-Token: $($s.token)"'
     Write-Host '  claude'
     Write-Host 'Ctrl+C stops everything.'
     Write-Host ''

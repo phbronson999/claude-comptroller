@@ -1,3 +1,5 @@
 <Solution>
+  <Project Path="../tests/e2e/Comptroller.E2E.csproj" />
+  <Project Path="../tools/mock-anthropic/mock-anthropic.csproj" />
   <Project Path="Comptroller.Service/Comptroller.Service.csproj" />
 </Solution>

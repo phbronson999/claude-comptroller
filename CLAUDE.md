@@ -10,6 +10,8 @@ A self-hosted "control tower" for a small team's Claude Code traffic.
 
 "Comptroller" is pronounced "controller". It controls the traffic and keeps an eye on the books (usage and plan limits).
 
+`README.md` is the source of truth for what exists and how to run it; keep it current with each step. This file holds the design.
+
 **Company-agnostic.** This is built for any small company to use, not one specific org. Nothing about a particular company (domain, hostnames, group names, branding) is hard-coded. All of it comes from config with neutral defaults, and the docs are written for a stranger setting it up for the first time.
 
 ## Hard requirements
@@ -17,7 +19,7 @@ A self-hosted "control tower" for a small team's Claude Code traffic.
 - **Subscription billing only.** Developers use Claude **Team / Pro / Max seats** (their own claude.ai login) and stay on subscription billing, never API billing.
   - The proxy holds **no Anthropic credential**. It never adds, replaces or strips `Authorization`, `x-api-key` or any `anthropic-*` header; the OAuth beta value in `anthropic-beta` must reach Anthropic.
   - Developer machines set `ANTHROPIC_BASE_URL` and `ANTHROPIC_CUSTOM_HEADERS` only. Never set `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY` or `apiKeyHelper`, because any of them switches the session to API billing.
-  - Verify first: the subscription keeps working through a non-Anthropic base URL **with the extra header attached**, including the usage meters in `/status`. See the known issue https://github.com/anthropics/claude-code/issues/87876.
+  - Verified in step 1 (Claude Code 2.1.330): subscription, `/status` meters and 1M context all work through a non-Anthropic base URL with the extra header. Re-check after major Claude Code upgrades; see https://github.com/anthropics/claude-code/issues/87876.
 - **Single upstream:** `https://api.anthropic.com`. No multi-provider routing, and no LLM gateway products.
 - **Self-hosted.** The only outbound connections are proxy → api.anthropic.com, plus the company's own directory (on-prem AD in the default mode).
 - **Never log prompt or response bodies.** Record metadata only.
@@ -85,6 +87,9 @@ People use multiple computers, so identity is **user + device**.
   - Look up the token hash.
   - If the token is missing or unknown, return **401**. If it's suspended or expired, return **403**. Write both in Anthropic's error JSON (`{"type":"error","error":{"type":"permission_error","message":"…"}}`) so Claude Code shows a readable reason, for example: *"This computer isn't connected to claude-comptroller. Open claude-comptroller-connect."* or *"Disconnected from the tray on LAPTOP-1. Click Reconnect."*
   - **Strip `X-Comptroller-Token` before forwarding.**
+  - `HEAD /api/hello` is the one proxied request that needs no token: Claude Code sends it without custom headers.
+- **Refresh keeps the same token** and moves its expiry, so running sessions don't break. It never undoes a disconnect or suspension. The tray can reconnect only from its own disconnect, not an admin suspension. A failed group check expires all that user's tokens at once.
+- `/_comptroller/*` calls require an `X-Comptroller-Client` header, so a web page can't use someone's Windows sign-in. Details: `contracts/api.md`.
 - **Lifetime:** tokens expire after `Identity.TokenLifetimeDays` (default 7). The tray app refreshes silently at logon and daily, and each refresh rechecks the group. Removing someone from the group, or disabling their account, cuts them off at the next refresh or expiry.
 - **Other modes** (design the interface now, implement after v1, so companies without AD can use it):
   - `oidc`: the tray app opens a browser sign-in (Entra, Okta or Google) and the group comes from a claim.
@@ -93,7 +98,7 @@ People use multiple computers, so identity is **user + device**.
 
 ## Service (C#)
 
-- **Stack:** .NET 10 (LTS), ASP.NET Core, **YARP** (`Yarp.ReverseProxy`, github.com/dotnet/yarp; use the latest stable), `Microsoft.AspNetCore.Authentication.Negotiate`, `Microsoft.Extensions.Hosting.WindowsServices`, `Microsoft.Data.Sqlite`, Serilog writing compact JSON to a rolling file.
+- **Stack:** .NET 10 (LTS; pin Microsoft packages to 10.x, since `dotnet add` picks 11), ASP.NET Core, **YARP** (`Yarp.ReverseProxy`, github.com/dotnet/yarp; use the latest stable), `Microsoft.AspNetCore.Authentication.Negotiate`, `Microsoft.Extensions.Hosting.WindowsServices`, `Microsoft.Data.Sqlite`, Serilog writing compact JSON to a rolling file.
 - **Publish command:**
   ```
   dotnet publish -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
@@ -237,12 +242,13 @@ Rule: **nothing operational or company-specific is hard-coded.**
 | Proxy | Upstream URL | `https://api.anthropic.com` | locked behind a confirm |
 | Proxy | Activity timeout | 10 min | 1–60 |
 | Proxy | Strip X-Forwarded headers | on | |
-| Access | Allowed client CIDRs | `127.0.0.1/32` | outer fence; warn if empty |
+| Access | Allowed client CIDRs | `127.0.0.1/32`, `::1/128` | outer fence; warn if empty |
 | TLS | Certificate (store thumbprint or .pfx) | none | restart |
 | Identity | Mode | `windows` | `windows` now; `oidc` and `manual` later |
 | Identity | Allowed group | `Claude Code Users` | name or SID |
 | Identity | Token lifetime | 7 days | 1–90 |
 | Identity | Token header name | `X-Comptroller-Token` | |
+| Identity | One-time code lifetime | 24 hours | 1–168, manual mode |
 | Cost | Pricing table | **none shipped as fact** | `pricing.json`, per model: input, output, cache write (5 m and 1 h), cache read, per million tokens, plus optional long-context tier thresholds and rates. Includes "last updated" and a source URL. The TUI warns when it's older than 90 days. Fill it from Anthropic's published pricing page at build time; never invent or remember prices. Editable in Settings. |
 | Cost | Seat plans | Team standard, annual | named plans (for example Team standard, Team premium, Pro, Max). Each has a **billing period**, `annual` (the default) or `monthly`, a price for that period, and for annual plans a **renewal date**. Prices are entered by the admin. Plans are assigned per user on the Users screen. |
 | Cost | Currency symbol · month start day | `$` · 1 | display only |
@@ -318,5 +324,4 @@ Each step should be shippable on its own.
 
 ## Open decisions
 
-- Commit attribution for this repo.
 - Using "Claude" in a publicly published project name: check Anthropic's brand guidelines before publishing, and include a "not affiliated with Anthropic" line in the README.

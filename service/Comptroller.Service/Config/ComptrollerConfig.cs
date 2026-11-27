@@ -6,6 +6,8 @@ public sealed record ComptrollerConfig
     public ProxyConfig Proxy { get; init; } = new();
     public LoggingConfig Logging { get; init; } = new();
     public IdentityConfig Identity { get; init; } = new();
+    public AccessConfig Access { get; init; } = new();
+    public DataConfig Data { get; init; } = new();
 
     /// <summary>Returns every problem found; an empty list means the config is usable.</summary>
     public IReadOnlyList<string> Validate()
@@ -18,7 +20,20 @@ public sealed record ComptrollerConfig
         if (Proxy.ActivityTimeoutMinutes is < 1 or > 60) errors.Add("Proxy.ActivityTimeoutMinutes must be 1 to 60.");
 
         if (string.IsNullOrWhiteSpace(Logging?.Folder)) errors.Add("Logging.Folder must not be empty.");
-        if (string.IsNullOrWhiteSpace(Identity?.TokenHeaderName)) errors.Add("Identity.TokenHeaderName must not be empty.");
+        if (string.IsNullOrWhiteSpace(Data?.Folder)) errors.Add("Data.Folder must not be empty.");
+
+        if (Identity is null) return [.. errors, "Identity section is invalid."];
+        if (string.IsNullOrWhiteSpace(Identity.TokenHeaderName)) errors.Add("Identity.TokenHeaderName must not be empty.");
+        if (Identity.Mode is not ("windows" or "manual")) errors.Add("Identity.Mode must be \"windows\" or \"manual\".");
+        if (Identity.Mode == "windows" && string.IsNullOrWhiteSpace(Identity.AllowedGroup)) errors.Add("Identity.AllowedGroup must not be empty.");
+        if (Identity.TokenLifetimeDays is < 1 or > 90) errors.Add("Identity.TokenLifetimeDays must be 1 to 90.");
+        if (Identity.CodeLifetimeHours is < 1 or > 168) errors.Add("Identity.CodeLifetimeHours must be 1 to 168.");
+
+        if (Access?.AllowedCidrs is null) return [.. errors, "Access.AllowedCidrs must be a list."];
+        foreach (var cidr in Access.AllowedCidrs)
+        {
+            if (!System.Net.IPNetwork.TryParse(cidr, out _)) errors.Add($"Access.AllowedCidrs: \"{cidr}\" isn't a CIDR such as 10.0.0.0/24.");
+        }
 
         return errors;
     }
@@ -46,5 +61,19 @@ public sealed record LoggingConfig
 
 public sealed record IdentityConfig
 {
+    public string Mode { get; init; } = "windows";
+    public string AllowedGroup { get; init; } = "Claude Code Users";
+    public int TokenLifetimeDays { get; init; } = 7;
+    public int CodeLifetimeHours { get; init; } = 24;
     public string TokenHeaderName { get; init; } = "X-Comptroller-Token";
+}
+
+public sealed record AccessConfig
+{
+    public IReadOnlyList<string> AllowedCidrs { get; init; } = ["127.0.0.1/32", "::1/128"];
+}
+
+public sealed record DataConfig
+{
+    public string Folder { get; init; } = "data";
 }
