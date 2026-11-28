@@ -9,6 +9,10 @@ public sealed record ComptrollerConfig
     public IdentityConfig Identity { get; init; } = new();
     public AccessConfig Access { get; init; } = new();
     public DataConfig Data { get; init; } = new();
+    public TlsConfig Tls { get; init; } = new();
+
+    /// <summary>Whether the listen URL is https://, so the service needs a certificate.</summary>
+    public bool UsesHttps => Proxy?.ListenUrl?.TrimStart().StartsWith("https://", StringComparison.OrdinalIgnoreCase) == true;
 
     /// <summary>Returns every problem found; an empty list means the config is usable.</summary>
     public IReadOnlyList<string> Validate()
@@ -39,6 +43,17 @@ public sealed record ComptrollerConfig
             if (Data.RetentionDays is < 1 or > 365) errors.Add("Data.RetentionDays must be 1 to 365.");
             if (!TimeOnly.TryParseExact(Data.PruneTime, "HH:mm", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out _))
                 errors.Add("Data.PruneTime must be a 24-hour time such as 02:00.");
+        }
+
+        if (Tls is not null)
+        {
+            if (Tls.CertificateStore is not ("LocalMachine" or "CurrentUser"))
+                errors.Add("Tls.CertificateStore must be \"LocalMachine\" or \"CurrentUser\".");
+            var thumbprint = TlsConfig.Normalize(Tls.CertificateThumbprint);
+            if (thumbprint.Length > 0 && (thumbprint.Length != 40 || !thumbprint.All(Uri.IsHexDigit)))
+                errors.Add("Tls.CertificateThumbprint must be a certificate thumbprint: 40 hexadecimal characters.");
+            if (UsesHttps && thumbprint.Length == 0)
+                errors.Add("Proxy.ListenUrl is https:// but Tls.CertificateThumbprint is empty: choose a certificate (admin terminal, Settings → TLS).");
         }
 
         if (Identity is null) return [.. errors, "Identity section is invalid."];
@@ -105,6 +120,19 @@ public sealed record IdentityConfig
 public sealed record AccessConfig
 {
     public IReadOnlyList<string> AllowedCidrs { get; init; } = ["127.0.0.1/32", "::1/128"];
+}
+
+/// <summary>The certificate for an https:// listen URL, from the Windows certificate store.</summary>
+public sealed record TlsConfig
+{
+    /// <summary>The certificate's thumbprint (SHA-1 hash), as certlm.msc shows it. Spaces are ignored.</summary>
+    public string CertificateThumbprint { get; init; } = "";
+
+    /// <summary>LocalMachine (a Windows service) or CurrentUser (a console run under that user).</summary>
+    public string CertificateStore { get; init; } = "LocalMachine";
+
+    public static string Normalize(string? thumbprint) =>
+        new((thumbprint ?? "").Where(c => !char.IsWhiteSpace(c) && c != '‎').ToArray());
 }
 
 public sealed record DataConfig

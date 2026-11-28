@@ -185,18 +185,7 @@ pub fn install(plan: &Plan, progress: &Sender<Progress>) {
             let place = Place { config_path: config_path.clone() };
             folders(name, &place, &config)
         }),
-        Box::new(|| {
-            service::start(name)?;
-            service::wait_for(name, State::Running, Duration::from_secs(30))?;
-            let port = Config::load(&config_path).map(|c| c.proxy.admin_port).unwrap_or(8081);
-            for _ in 0..20 {
-                if let Some(health) = crate::health::fetch(port) {
-                    return Ok(format!("running · version {}", health.version));
-                }
-                std::thread::sleep(Duration::from_millis(500));
-            }
-            Err("The service started but /health doesn't answer. See the log folder.".into())
-        }),
+        Box::new(|| takeoff(name, &config_path)),
     ];
     run(&steps, progress);
 }
@@ -276,6 +265,68 @@ pub fn uninstall(plan: &Plan, place: &Place, config: &Config, progress: &Sender<
         }));
     }
     run(&steps, progress);
+}
+
+/// Starts the service and waits until /health answers. When it can't, says why: a console
+/// run already on its ports, or the service's own last fatal log line.
+pub fn takeoff(name: &str, config_path: &Path) -> Result<String, String> {
+    let config = Config::load(config_path).unwrap_or_default();
+    let port = config.proxy.admin_port;
+    // Both would want the same ports, and the console run got there first.
+    if let Some(h) = crate::health::fetch(port) {
+        if !h.windows_service {
+            return Err(format!(
+                "A console run of the service (such as dev.ps1) already answers on port {port}. Stop it (Ctrl+C in its window) first: the two can't share ports."
+            ));
+        }
+    }
+    let place = Place { config_path: config_path.to_path_buf() };
+    let why = |what: String| match last_fatal(&place.log_dir(&config)) {
+        Some(reason) => format!("{what} The service's log says: {reason}"),
+        None => format!("{what} See the log folder."),
+    };
+    service::start(name)?;
+    service::wait_for(name, State::Running, Duration::from_secs(30)).map_err(why)?;
+    for _ in 0..20 {
+        if let Some(health) = crate::health::fetch(port) {
+            return Ok(format!("running · version {}", health.version));
+        }
+        // It started, then stopped: no point waiting longer.
+        if service::query(name).ok().flatten().is_some_and(|s| s.state == State::Stopped) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    Err(why(format!("The service started but /health doesn't answer on port {port}.")))
+}
+
+/// The newest fatal line in the service's log folder, as plain text.
+pub fn last_fatal(log_dir: &Path) -> Option<String> {
+    let newest = fs::read_dir(log_dir)
+        .ok()?
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".log"))
+        .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())?;
+    let text = fs::read_to_string(newest.path()).ok()?;
+    // Compact JSON, one event a line: "@mt" is the template, its holes are properties.
+    text.lines().rev().take(500).find_map(|line| {
+        let event: serde_json::Value = serde_json::from_str(line).ok()?;
+        if event.get("@l")?.as_str()? != "Fatal" {
+            return None;
+        }
+        let mut message = event.get("@mt")?.as_str()?.to_string();
+        if let Some(props) = event.as_object() {
+            for (key, value) in props.iter().filter(|(k, _)| !k.starts_with('@')) {
+                let shown = value.as_str().map(String::from).unwrap_or_else(|| value.to_string());
+                // {Name} or {Name:format}.
+                while let Some(start) = message.find(&format!("{{{key}")) {
+                    let Some(end) = message[start..].find('}') else { break };
+                    message.replace_range(start..start + end + 1, &shown);
+                }
+            }
+        }
+        Some(message)
+    })
 }
 
 fn run(steps: &[Box<dyn Fn() -> Result<String, String> + '_>], progress: &Sender<Progress>) {
@@ -368,6 +419,12 @@ fn folders(name: &str, place: &Place, config: &Config) -> Result<String, String>
     grant(&data, &["/inheritance:r", "/grant", "*S-1-5-32-544:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F", &modify])?;
     // The service reads its config and may need to write a .bak later.
     grant(&place.folder(), &["/grant", &format!("{account}:(RX)")])?;
+    // A certificate already chosen in a kept config: the new account must read its key.
+    let thumbprint = config.tls.certificate_thumbprint.trim();
+    if !thumbprint.is_empty() && config.tls.certificate_store == "LocalMachine" {
+        crate::certs::grant_key_access(thumbprint, &account).map_err(|e| format!("The HTTPS certificate's private key: {e}"))?;
+        return Ok(format!(r"{}  {}  {} · certificate key readable", data.display(), data.join("archives").display(), logs.display()));
+    }
     Ok(format!(r"{}  {}  {}", data.display(), data.join("archives").display(), logs.display()))
 }
 
@@ -387,5 +444,24 @@ mod tests {
         let place = Place { config_path: PathBuf::from(r"C:\svc\comptroller.json") };
         assert_eq!(uninstall_plan("x", &place, &Config::default(), false).steps.len(), 3);
         assert_eq!(uninstall_plan("x", &place, &Config::default(), true).steps.len(), 4);
+    }
+
+    #[test]
+    fn the_last_fatal_log_line_says_why_the_service_stopped() {
+        let dir = std::env::temp_dir().join(format!("comptroller-fatal-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("comptroller-20261127.log"),
+            concat!(
+                r#"{"@t":"2026-11-27T23:00:00Z","@mt":"Listening on {ListenUrl}","ListenUrl":"http://localhost:8080"}"#, "\n",
+                r#"{"@t":"2026-11-27T23:01:00Z","@mt":"Can't start: {Reason} Stop it.","@l":"Fatal","Reason":"Failed to bind to address http://127.0.0.1:8081."}"#, "\n",
+                r#"{"@t":"2026-11-27T23:01:01Z","@mt":"Stopped","@l":"Information"}"#, "\n",
+            ),
+        )
+        .unwrap();
+        assert_eq!(last_fatal(&dir).as_deref(), Some("Can't start: Failed to bind to address http://127.0.0.1:8081. Stop it."));
+        assert_eq!(last_fatal(&dir.join("missing")), None);
+        let _ = fs::remove_dir_all(&dir);
     }
 }

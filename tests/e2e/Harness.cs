@@ -17,8 +17,20 @@ public class Harness : IAsyncLifetime
 
     private readonly List<Process> _processes = [];
     private readonly string _folder = Path.Combine(Path.GetTempPath(), "comptroller-e2e-" + Guid.NewGuid().ToString("N"));
-    private readonly string _serviceUrl = $"http://localhost:{FreePort()}";
+    private readonly int _servicePort = FreePort();
     private readonly int _adminPort = FreePort();
+    private string _serviceUrl => $"{(Https ? "https" : "http")}://localhost:{_servicePort}";
+
+    /// <summary>Listen on https:// (the derived harness supplies the certificate in <see cref="Customize"/>).</summary>
+    protected virtual bool Https => false;
+
+    /// <summary>Changes every config this harness writes, before a test's own change.</summary>
+    protected virtual void Customize(JsonNode config)
+    {
+    }
+
+    /// <summary>How the test clients connect to the service.</summary>
+    protected virtual HttpClientHandler NewHandler() => new();
 
     public string UpstreamUrl { get; } = $"http://localhost:{FreePort()}";
     public string ConfigPath => Path.Combine(_folder, "comptroller.json");
@@ -36,8 +48,10 @@ public class Harness : IAsyncLifetime
         Start("mock-anthropic", "--urls", UpstreamUrl, "--delay-ms", "100");
         Start("claude-comptroller-service", "--config", ConfigPath);
 
-        Client = new HttpClient { BaseAddress = new Uri(_serviceUrl) };
-        WindowsClient = new HttpClient(new HttpClientHandler { UseDefaultCredentials = true }) { BaseAddress = new Uri(_serviceUrl) };
+        Client = new HttpClient(NewHandler()) { BaseAddress = new Uri(_serviceUrl) };
+        var windows = NewHandler();
+        windows.UseDefaultCredentials = true;
+        WindowsClient = new HttpClient(windows) { BaseAddress = new Uri(_serviceUrl) };
         Upstream = new HttpClient { BaseAddress = new Uri(UpstreamUrl) };
         Admin = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{_adminPort}") };
 
@@ -45,7 +59,7 @@ public class Harness : IAsyncLifetime
         await WaitFor(() => Client.SendAsync(new HttpRequestMessage(HttpMethod.Head, "/api/hello")));
     }
 
-    public Task DisposeAsync()
+    public virtual Task DisposeAsync()
     {
         foreach (var process in _processes)
         {
@@ -84,6 +98,7 @@ public class Harness : IAsyncLifetime
               "Logging": { "Folder": "logs" }
             }
             """)!;
+        Customize(config);
         change?.Invoke(config);
         File.WriteAllText(ConfigPath, config.ToJsonString());
     }

@@ -22,6 +22,32 @@ pub struct Health {
     pub recording: Recording,
     #[serde(default)]
     pub retention: Option<Retention>,
+    /// The certificate of an https:// listener; none on plain HTTP.
+    #[serde(default)]
+    pub tls: Option<Tls>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Tls {
+    pub thumbprint: String,
+    pub subject: String,
+    pub issuer: String,
+    #[serde(default)]
+    pub dns_names: Vec<String>,
+    pub not_after_utc: String,
+}
+
+impl Tls {
+    /// Whole days until it expires; negative once it has.
+    pub fn days_left(&self) -> Option<i64> {
+        parse_utc(&self.not_after_utc).map(|t| (t - now()).div_euclid(86_400))
+    }
+
+    /// A host name it's valid for, to check it the way clients will. Wildcards are skipped.
+    pub fn host(&self) -> Option<&str> {
+        self.dns_names.iter().map(String::as_str).find(|n| !n.starts_with('*'))
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -81,8 +107,14 @@ impl Health {
     }
 }
 
+/// An HTTP client using Windows' TLS, so https:// checks trust what developers' computers
+/// trust: the Windows certificate store, a company CA included.
 pub fn agent(timeout: Duration) -> ureq::Agent {
-    ureq::AgentBuilder::new().timeout_connect(timeout).timeout(timeout * 5).redirects(0).build()
+    let builder = ureq::AgentBuilder::new().timeout_connect(timeout).timeout(timeout * 5).redirects(0);
+    match native_tls::TlsConnector::new() {
+        Ok(tls) => builder.tls_connector(std::sync::Arc::new(tls)).build(),
+        Err(_) => builder.build(),
+    }
 }
 
 pub fn url(admin_port: u16) -> String {

@@ -103,7 +103,14 @@ Same shape as the proxy errors. 400 bad request, 401 not signed in or unknown to
   "windowsService": true,
   "config": { "status": "ok", "error": null, "path": "C:\\…\\comptroller.json", "loadedUtc": "2026-11-27T09:00:00.000Z" },
   "schemaVersion": 3,
-  "listenUrl": "http://localhost:8080",
+  "listenUrl": "https://+:8443",
+  "tls": {
+    "thumbprint": "3F2A…40 hex digits",
+    "subject": "claude.example.internal",
+    "issuer": "Example Issuing CA",
+    "dnsNames": ["claude.example.internal"],
+    "notAfterUtc": "2027-11-27T00:00:00.000Z"
+  },
   "upstreamUrl": "https://api.anthropic.com",
   "inFlight": {
     "count": 1,
@@ -126,5 +133,6 @@ Same shape as the proxy errors. 400 bad request, 401 not signed in or unknown to
 
 - `config.status` is `error` when the file on disk was rejected. `error` says why, and the last good config stays in use.
 - `listenUrl` is what the service is listening on now. If the file says something else, a restart is needed.
+- `tls` is the certificate an `https://` listener serves, read at startup: no key material. It's null on plain HTTP.
 - `windowsService` is false for a console run.
 - The admin terminal reads this every 2 seconds; it's not logged.

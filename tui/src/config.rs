@@ -24,6 +24,24 @@ pub struct Config {
     pub cost: Cost,
     pub dashboard: Dashboard,
     pub archives: Archives,
+    /// Written `TLS`; the service matches names in either case.
+    #[serde(rename = "TLS", alias = "Tls", alias = "tls")]
+    pub tls: Tls,
+}
+
+/// The certificate for an https:// listen URL. The service reads it at startup.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "PascalCase", default)]
+pub struct Tls {
+    pub certificate_thumbprint: String,
+    /// `LocalMachine` for the Windows service, `CurrentUser` for a console run.
+    pub certificate_store: String,
+}
+
+impl Default for Tls {
+    fn default() -> Self {
+        Self { certificate_thumbprint: String::new(), certificate_store: "LocalMachine".into() }
+    }
 }
 
 /// The admin terminal's own settings: the service ignores them.
@@ -163,6 +181,7 @@ impl Default for Config {
             cost: Cost::default(),
             dashboard: Dashboard::default(),
             archives: Archives::default(),
+            tls: Tls::default(),
         }
     }
 }
@@ -272,6 +291,24 @@ pub fn default_install_dir() -> PathBuf {
     base.join(DEFAULT_SERVICE_NAME)
 }
 
+/// The base URL the admin terminal's checks use. Over HTTPS a wildcard or local address is
+/// reached by the certificate's own host name (`cert_host`), so the certificate is checked
+/// the way developers' computers check it; otherwise as [`local_url`].
+pub fn check_url(listen_url: &str, cert_host: Option<&str>) -> String {
+    let local = local_url(listen_url);
+    let Some(host) = cert_host else { return local };
+    let Some(rest) = local.strip_prefix("https://") else { return local };
+    let port = rest.rsplit_once(':').filter(|(_, p)| !p.contains(']')).map(|(_, p)| p);
+    let current = port.map_or(rest, |p| &rest[..rest.len() - p.len() - 1]);
+    if !matches!(current, "localhost" | "127.0.0.1" | "[::1]") {
+        return local;
+    }
+    match port {
+        Some(port) => format!("https://{host}:{port}"),
+        None => format!("https://{host}"),
+    }
+}
+
 /// The base URL to reach the service on this computer. A wildcard listen address
 /// (`http://+:8080`, `http://0.0.0.0:8080`) is reached through localhost.
 pub fn local_url(listen_url: &str) -> String {
@@ -329,5 +366,12 @@ mod tests {
         assert_eq!(local_url("https://0.0.0.0:8443/"), "https://localhost:8443");
         assert_eq!(local_url("http://localhost:8080"), "http://localhost:8080");
         assert_eq!(local_url("https://comptroller.example.internal"), "https://comptroller.example.internal");
+        // HTTPS checks go to the certificate's name, so it's checked as clients check it.
+        let host = Some("claude.example.internal");
+        assert_eq!(check_url("https://+:8443", host), "https://claude.example.internal:8443");
+        assert_eq!(check_url("https://localhost", host), "https://claude.example.internal");
+        assert_eq!(check_url("https://other.example.internal:8443", host), "https://other.example.internal:8443");
+        assert_eq!(check_url("http://+:8080", host), "http://localhost:8080");
+        assert_eq!(check_url("https://+:8443", None), "https://localhost:8443");
     }
 }

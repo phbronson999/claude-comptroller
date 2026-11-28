@@ -47,6 +47,10 @@
     "P95WarningSeconds": 10,
     "ErrorRateWarningPercent": 5
   },
+  "TLS": {
+    "CertificateThumbprint": "",
+    "CertificateStore": "LocalMachine"
+  },
   "Archives": {
     "Folder": "data\\archives",
     "DefaultContent": "summary",

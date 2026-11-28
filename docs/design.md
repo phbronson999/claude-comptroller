@@ -189,7 +189,7 @@ Rule: **nothing operational or company-specific is hard-coded.**
 | Proxy | Shutdown timeout | 60 s | 5–600; how long a stop waits for replies in flight; restart |
 | Proxy | Strip X-Forwarded headers | on | |
 | Access | Allowed client CIDRs | `127.0.0.1/32`, `::1/128` | outer fence; warn if empty |
-| TLS | Certificate (store thumbprint or .pfx) | none | restart |
+| TLS | Certificate thumbprint · store | none · LocalMachine | restart. Built: see below |
 | Identity | Mode | `windows` | `windows` now; `oidc` and `manual` later |
 | Identity | Allowed group | `Claude Code Users` | name or SID |
 | Identity | Token lifetime | 7 days | 1–90 |
@@ -242,6 +242,19 @@ Requirement: the service, TUI and tray app must all run and be testable on a sin
   - an invalid config keeps the last good one
 - **Unit tests:** the Rust TUI tests run against `contracts/` samples. The tray app's settings writer is tested against temp folders, including merging with existing settings and restoring the backup.
 - **README pictures.** `tools/screenshots.ps1` seeds a temporary database with the example people, starts the service in the background, and runs an ignored test in the admin terminal (`src/screenshots.rs`). That test draws each screen into a buffer, turns the buffer into an SVG cell by cell (block and box-drawing characters as shapes), and renders it to PNG with resvg. It refuses to write a picture containing this computer's user or computer name.
+
+## HTTPS (built after step 11)
+
+- **Why:** every request carries the device token, the developer's own Claude login (`Authorization`, passed through untouched) and the prompt, so anything beyond the server itself needs TLS. A second header or a signed token wouldn't help: over plain HTTP anything in the request can be read and replayed.
+- **Certificate from the Windows store, by thumbprint** (`TLS.CertificateThumbprint`, `TLS.CertificateStore`: `LocalMachine` for the service, `CurrentUser` for a console run). The private key stays in Windows; there's no `.pfx` path or password in the config. Kestrel serves it on an `https://` listen URL; `/health` stays plain HTTP on loopback. An `https://` URL without a thumbprint is rejected.
+- **Startup** checks the certificate exists, has a private key this process can open, and logs a warning if it has expired. If the key can't be read the service stops with a message that says to choose the certificate again.
+- **Clients:** Claude Code trusts the Windows certificate store as well as its bundled roots (native installer, or Node 22.15+ for npm), and the tray app uses WinHTTP, so a company CA certificate needs nothing on developer computers. Developer machines still set only `ANTHROPIC_BASE_URL` (now `https://…`) and `ANTHROPIC_CUSTOM_HEADERS`.
+- **Admin terminal:**
+  - Settings → TLS lists the store's certificates through PowerShell (`Get-ChildItem Cert:\LocalMachine\My`), flagging ones without a private key, not for server authentication, expired or self-signed.
+  - Saving a LocalMachine certificate grants `NT SERVICE\<name>` read on its private key file with `icacls` (found from the key's unique name under `ProgramData\Microsoft\Crypto\Keys` or `RSA\MachineKeys`). Install does the same when the kept config already names one.
+  - Its HTTP checks use Windows' TLS (SChannel through `native-tls`), and connect by the certificate's DNS name rather than `localhost`, so they check trust and name the way clients will. The preflight test adds a Certificate check.
+  - The home screen warns on plain HTTP beyond localhost and 30 days before expiry; Status shows the certificate.
+- **Local testing:** `dev.ps1 -Https` uses the .NET development certificate for `localhost` from the CurrentUser store; e2e tests make a throwaway self-signed certificate there.
 
 ## Release (built in step 11)
 

@@ -18,8 +18,11 @@ public static class Health
     /// </summary>
     /// <param name="store">The live config.</param>
     /// <param name="startup">The config the service started with: its listeners don't change on reload.</param>
-    public static void UseAdminPort(this WebApplication app, ConfigStore store, ComptrollerConfig startup)
+    /// <param name="certificate">The certificate the https:// listener uses, if any.</param>
+    public static void UseAdminPort(this WebApplication app, ConfigStore store, ComptrollerConfig startup,
+        System.Security.Cryptography.X509Certificates.X509Certificate2? certificate)
     {
+        var tls = certificate is null ? null : ServerCertificate.Describe(certificate);
         var started = DateTime.UtcNow;
         var adminPort = startup.Proxy.AdminPort;
         var json = new JsonSerializerOptions(JsonSerializerDefaults.Web);
@@ -57,6 +60,7 @@ public static class Health
                 },
                 schemaVersion = IdentityStore.SchemaVersion,
                 listenUrl = startup.Proxy.ListenUrl,
+                tls,
                 upstreamUrl = store.CurrentValue.Proxy.UpstreamUrl,
                 inFlight = new
                 {

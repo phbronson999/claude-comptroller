@@ -5,6 +5,7 @@
 pub mod activity;
 pub mod archive;
 pub mod blackbox;
+pub mod certs;
 pub mod config;
 pub mod directory;
 pub mod health;
