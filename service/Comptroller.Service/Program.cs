@@ -45,6 +45,8 @@ Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Is(level)
     .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
     .MinimumLevel.Override("Yarp", LogEventLevel.Warning)
+    // Said once, in plain words, by the catch at the end of this file.
+    .Filter.ByExcluding(e => e.MessageTemplate.Text == "Hosting failed to start")
     .WriteTo.Console()
     .WriteTo.File(
         new CompactJsonFormatter(),
@@ -83,6 +85,9 @@ try
         return 0;
     }
 
+    // An https:// listen URL serves this certificate; read once, as the listeners are.
+    var certificate = config.UsesHttps ? ServerCertificate.Load(config.Tls) : null;
+
     var builder = WebApplication.CreateSlimBuilder(new WebApplicationOptions
     {
         // A service starts in System32.
@@ -115,12 +120,16 @@ try
         kestrel.AddServerHeader = false;
         // Requests with images or long histories exceed the 30 MB default; the upstream sets the limit.
         kestrel.Limits.MaxRequestBodySize = null;
+        if (certificate is not null)
+        {
+            kestrel.ConfigureHttpsDefaults(https => https.ServerCertificate = certificate);
+        }
     });
 
     var app = builder.Build();
 
     // Before logging: the admin TUI polls every few seconds.
-    app.UseAdminPort(store, config);
+    app.UseAdminPort(store, config, certificate);
 
     // Metadata only: no bodies, no query strings, no header values.
     app.Use(async (context, next) =>
@@ -152,13 +161,33 @@ try
     app.MapComptrollerEndpoints();
     app.MapReverseProxy();
 
-    Log.Information("Listening on {ListenUrl}, health on port {AdminPort}, forwarding to {UpstreamUrl}, config {ConfigPath}",
-        config.Proxy.ListenUrl, config.Proxy.AdminPort, config.Proxy.UpstreamUrl, configPath);
+    // Once the ports are actually bound, not before.
+    app.Lifetime.ApplicationStarted.Register(() =>
+    {
+        Log.Information("Listening on {ListenUrl}, health on port {AdminPort}, forwarding to {UpstreamUrl}, config {ConfigPath}",
+            config.Proxy.ListenUrl, config.Proxy.AdminPort, config.Proxy.UpstreamUrl, configPath);
+        if (certificate is not null)
+            Log.Information("HTTPS with certificate {Subject} ({Thumbprint}), valid until {NotAfter:u}",
+                certificate.GetNameInfo(System.Security.Cryptography.X509Certificates.X509NameType.SimpleName, false), certificate.Thumbprint, certificate.NotAfter.ToUniversalTime());
+        else if (!config.Proxy.ListenUrl.Contains("localhost", StringComparison.OrdinalIgnoreCase) && !config.Proxy.ListenUrl.Contains("127.0.0.1", StringComparison.Ordinal))
+            Log.Warning("Listening on plain HTTP: device tokens, Claude logins and prompts cross the network unencrypted. Set an https:// listen URL and a certificate");
+    });
     app.Lifetime.ApplicationStopping.Register(() => Log.Information("Stopping: waiting for requests in flight"));
     app.Lifetime.ApplicationStopped.Register(() => Log.Information("Stopped"));
 
     await app.RunAsync();
     return 0;
+}
+catch (Exception ex) when (ex is IOException && ex.InnerException is Microsoft.AspNetCore.Connections.AddressInUseException)
+{
+    // The usual cause is another copy of the service, so say so without a stack trace.
+    Log.Fatal("Can't start: {Reason} Another program is using that port, often another copy of claude-comptroller (an installed service, or a console run). Stop it, or change Proxy.ListenUrl or Proxy.AdminPort.", ex.Message);
+    return 1;
+}
+catch (InvalidOperationException ex) when (ex.Message.Contains("certificate", StringComparison.OrdinalIgnoreCase))
+{
+    Log.Fatal("Can't start: {Reason}", ex.Message);
+    return 1;
 }
 catch (Exception ex)
 {

@@ -11,6 +11,7 @@ dist/
 # Runtime data
 dev/sandbox/
 dev/downloads/
+dev/comptroller.https.json
 data/
 logs/
 *.bak

@@ -31,6 +31,8 @@ pub enum Kind {
     Header,
     /// A time of day, typed and shown the local way, stored as HH:mm.
     Time,
+    /// A certificate thumbprint, picked from the Windows store (or typed). Empty for none.
+    Certificate,
 }
 
 #[derive(Debug)]
@@ -67,7 +69,7 @@ pub const GROUPS: [(&str, Option<&str>); 10] = [
     ("Cost", None),
     ("Dashboard", None),
     ("Archives", None),
-    ("TLS", Some("later")),
+    ("TLS", None),
 ];
 
 const LEVELS: &[&str] = &["Verbose", "Debug", "Information", "Warning", "Error", "Fatal"];
@@ -364,9 +366,30 @@ pub const SETTINGS: &[Setting] = &[
         restart: false,
         caution: None,
     },
+    Setting {
+        section: "TLS",
+        key: "CertificateThumbprint",
+        label: "Certificate",
+        help: "For an https:// listen URL. Enter lists this server's certificates; saving one lets the service's account read its private key.",
+        kind: Kind::Certificate,
+        default: "",
+        restart: true,
+        caution: None,
+    },
+    Setting {
+        section: "TLS",
+        key: "CertificateStore",
+        label: "Certificate store",
+        help: "LocalMachine for the Windows service. CurrentUser only for a console run, such as testing on a laptop.",
+        kind: Kind::Choice(STORES),
+        default: "LocalMachine",
+        restart: true,
+        caution: None,
+    },
 ];
 
 const CONTENTS: &[&str] = &["summary", "raw"];
+const STORES: &[&str] = &["LocalMachine", "CurrentUser"];
 
 /// The index of a setting by its `Section.Key` path.
 pub fn index_of(path: &str) -> Option<usize> {
@@ -427,6 +450,15 @@ pub fn parse(setting: &Setting, text: &str) -> Result<Value, String> {
                 Ok(Value::String(text.into()))
             } else {
                 Err("Letters, digits and dashes only, such as X-Comptroller-Token".into())
+            }
+        }
+        Kind::Certificate => {
+            // As certlm.msc shows it, spaces (and the invisible mark a copy can carry) dropped.
+            let thumbprint: String = text.chars().filter(|c| !c.is_whitespace() && *c != '\u{200e}').collect::<String>().to_ascii_uppercase();
+            if thumbprint.is_empty() || (thumbprint.len() == 40 && thumbprint.chars().all(|c| c.is_ascii_hexdigit())) {
+                Ok(Value::String(thumbprint))
+            } else {
+                Err("A thumbprint is 40 hexadecimal characters, as certlm.msc shows it".into())
             }
         }
     }
@@ -503,6 +535,10 @@ pub fn check_together(doc: &Value, changes: &[(usize, Value)]) -> Vec<String> {
     }
     if value("Identity.Mode") == "windows" && value("Identity.AllowedGroup").as_str().is_none_or(|g| g.trim().is_empty()) {
         problems.push("Windows sign-in needs an allowed group.".into());
+    }
+    let https = listen.as_str().is_some_and(|u| u.trim().to_ascii_lowercase().starts_with("https://"));
+    if https && value("TLS.CertificateThumbprint").as_str().is_none_or(|t| t.trim().is_empty()) {
+        problems.push("An https:// listen URL needs a certificate: choose one in Settings → TLS.".into());
     }
     problems
 }

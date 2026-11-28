@@ -178,6 +178,12 @@ impl Snapshot {
     pub fn config_or_default(&self) -> Config {
         self.config.clone().unwrap_or_default()
     }
+
+    /// The address checks use: what the service listens on, by the certificate's name over HTTPS.
+    pub fn check_base(&self) -> String {
+        let listen = self.health.as_ref().map(|h| h.listen_url.clone()).unwrap_or_else(|| self.config_or_default().proxy.listen_url);
+        config::check_url(&listen, self.health.as_ref().and_then(|h| h.tls.as_ref()).and_then(|t| t.host()))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -361,7 +367,8 @@ fn poll_once(
     if health.is_none() {
         *last_upstream = (Instant::now(), None);
     } else if force_upstream || (watching_status && (last_upstream.1.is_none() || last_upstream.0.elapsed() > Duration::from_secs(UPSTREAM_SECS))) {
-        let base = config::local_url(&health.as_ref().map(|h| h.listen_url.clone()).unwrap_or_default());
+        let h = health.as_ref();
+        let base = config::check_url(&h.map(|h| h.listen_url.clone()).unwrap_or_default(), h.and_then(|h| h.tls.as_ref()).and_then(|t| t.host()));
         *last_upstream = (Instant::now(), Some(health::upstream_latency(&base)));
     }
 
@@ -672,18 +679,8 @@ impl App {
             _ if self.needs_admin("Takeoff") => {}
             _ => {
                 let name = self.snapshot.service_name.clone();
-                let port = self.snapshot.config_or_default().proxy.admin_port;
-                self.run_busy(Busy::Starting, move || {
-                    service::start(&name)?;
-                    service::wait_for(&name, State::Running, Duration::from_secs(30))?;
-                    for _ in 0..20 {
-                        if health::fetch(port).is_some() {
-                            return Ok("Takeoff: the service is running.".into());
-                        }
-                        thread::sleep(Duration::from_millis(500));
-                    }
-                    Err("The service started but /health doesn't answer. Check Status and the log folder.".into())
-                });
+                let config_path = self.snapshot.place.config_path.clone();
+                self.run_busy(Busy::Starting, move || install::takeoff(&name, &config_path).map(|_| "Takeoff: the service is running.".into()));
             }
         }
     }
@@ -713,21 +710,13 @@ impl App {
         }
         let name = self.snapshot.service_name.clone();
         // The file as saved, which may have a new admin port.
-        let config = Config::load(&self.snapshot.place.config_path).unwrap_or_else(|_| self.snapshot.config_or_default());
+        let config_path = self.snapshot.place.config_path.clone();
+        let config = Config::load(&config_path).unwrap_or_else(|_| self.snapshot.config_or_default());
         let wait = Duration::from_secs(config.proxy.shutdown_timeout_seconds as u64 + 30);
-        let port = config.proxy.admin_port;
         self.run_busy(Busy::Restarting, move || {
             service::stop(&name)?;
             service::wait_for(&name, State::Stopped, wait)?;
-            service::start(&name)?;
-            service::wait_for(&name, State::Running, Duration::from_secs(30))?;
-            for _ in 0..20 {
-                if health::fetch(port).is_some() {
-                    return Ok("Restarted: the service uses the saved settings.".into());
-                }
-                thread::sleep(Duration::from_millis(500));
-            }
-            Err(format!("The service restarted but /health doesn't answer on port {port}. Check Status and the log folder."))
+            install::takeoff(&name, &config_path).map(|_| "Restarted: the service uses the saved settings.".into())
         });
     }
 
@@ -836,7 +825,7 @@ impl App {
 
         // Typing goes to the field being edited, not to the keys below.
         match self.screen {
-            Screen::Settings if self.settings.editing.is_some() => return crate::settings_screen::on_key(self, key),
+            Screen::Settings if self.settings.editing.is_some() || self.settings.picker.is_some() => return crate::settings_screen::on_key(self, key),
             Screen::Users if self.users.typing() => return crate::users_screen::on_key(self, key),
             Screen::Cost if self.cost.editing() => return crate::cost_screen::on_key(self, key),
             Screen::Archives if self.archives.form.is_some() => return crate::archives_screen::on_key(self, key),

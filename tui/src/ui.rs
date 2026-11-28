@@ -302,6 +302,18 @@ fn draw_glance(f: &mut Frame, app: &App, area: Rect) {
         _ => {}
     }
     if let Some(h) = &s.health {
+        // Plain HTTP beyond this computer sends tokens, Claude logins and prompts in the clear.
+        let local = ["localhost", "127.0.0.1", "[::1]"].iter().any(|l| h.listen_url.to_ascii_lowercase().contains(l));
+        if h.tls.is_none() && !local {
+            notes.push((theme::ORANGE, "Plain HTTP: tokens, Claude logins and prompts cross the network unencrypted. Settings → TLS sets up HTTPS.".into()));
+        }
+        if let Some(days) = h.tls.as_ref().and_then(|t| t.days_left()) {
+            if days < 0 {
+                notes.push((theme::PINK, "The HTTPS certificate has expired: Claude Code can't connect. Choose a new one in Settings → TLS.".into()));
+            } else if days <= 30 {
+                notes.push((theme::ORANGE, format!("The HTTPS certificate expires in {days} days. Renew it, then choose it in Settings → TLS.")));
+            }
+        }
         if h.schema_version != SCHEMA_VERSION {
             notes.push((theme::ORANGE, format!("Database schema {} but this terminal expects {SCHEMA_VERSION}. Update both together.", h.schema_version)));
         }
@@ -381,7 +393,15 @@ fn draw_status(f: &mut Frame, app: &App, body: Rect) {
         } else {
             plain(config.access.allowed_cidrs.join(", "))
         }),
-        kv("Certificate", w, if listen.starts_with("https") { plain("configured outside comptroller.json") } else { colored("none · plain http", theme::FAINT) }),
+        kv("Certificate", w, match s.health.as_ref().and_then(|h| h.tls.as_ref()) {
+            Some(tls) => match tls.days_left() {
+                Some(days) if days < 0 => colored(format!("{} · expired", tls.subject), theme::PINK),
+                Some(days) if days <= 30 => colored(format!("{} · expires in {days} days", tls.subject), theme::ORANGE),
+                _ => plain(format!("{} · until {}", tls.subject, &tls.not_after_utc[..10.min(tls.not_after_utc.len())])),
+            },
+            None if listen.starts_with("https") => colored("https in the file: restart to use it", theme::ORANGE),
+            None => colored("none · plain http", theme::FAINT),
+        }),
         kv("Config file", w, plain(s.place.config_path.display().to_string())),
     ];
     if let Some(h) = &s.health {
@@ -456,7 +476,7 @@ fn draw_status(f: &mut Frame, app: &App, body: Rect) {
         format!("sc.exe query {}", s.service_name),
         format!("sc.exe qc {}", s.service_name),
         format!("GET {}", health::url(config.proxy.admin_port)),
-        format!("HEAD {}/api/hello", comptroller_admin::config::local_url(&listen)),
+        format!("HEAD {}/api/hello", s.check_base()),
     ] {
         lines.push(Line::from(vec![Span::styled("$ ", theme::faint()), Span::styled(command, theme::text())]));
     }
@@ -468,7 +488,9 @@ fn draw_status(f: &mut Frame, app: &App, body: Rect) {
 fn draw_preflight(f: &mut Frame, app: &App, body: Rect) {
     let block = panel("Preflight test", true);
     let width = block.inner(body).width as usize;
-    let total = 5;
+    // A sixth, for the certificate, over HTTPS.
+    let https = app.snapshot.check_base().starts_with("https://");
+    let total = if https { 6 } else { 5 };
     let passed = app.preflight.iter().filter(|c| c.passed()).count();
     let summary = match (app.preflight_running, app.preflight_took) {
         (true, _) => format!("{} of {total}", app.preflight.len()),
@@ -489,7 +511,10 @@ fn draw_preflight(f: &mut Frame, app: &App, body: Rect) {
             Span::styled(format!("{} ms", check.took.as_millis()), theme::faint()),
         ]));
         if let Err(error) = &check.result {
-            lines.push(Line::from(Span::styled(format!("  {error}"), theme::fg(theme::PINK))));
+            // Wrapped here, so the box below still knows how many lines there are.
+            for line in wrap_words(error, width.saturating_sub(4)) {
+                lines.push(Line::from(Span::styled(format!("  {line}"), theme::fg(theme::PINK))));
+            }
         }
     }
     if app.preflight_running {
@@ -525,10 +550,7 @@ fn draw_preflight(f: &mut Frame, app: &App, body: Rect) {
         y += area.height + 1;
     }
 
-    let config = app.snapshot.config_or_default();
-    let base = comptroller_admin::config::local_url(
-        &app.snapshot.health.as_ref().map(|h| h.listen_url.clone()).unwrap_or(config.proxy.listen_url),
-    );
+    let base = app.snapshot.check_base();
     if y + 4 < inner.bottom() {
         let area = Rect { x: inner.x, y, width: inner.width, height: inner.bottom() - y };
         let lines = vec![
@@ -541,6 +563,24 @@ fn draw_preflight(f: &mut Frame, app: &App, body: Rect) {
         ];
         f.render_widget(Paragraph::new(lines), area);
     }
+}
+
+/// Splits `text` into lines no wider than `width` (at least 20), at spaces.
+pub fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    let room = width.max(20);
+    let mut lines = vec![String::new()];
+    for word in text.split(' ') {
+        let line = lines.last_mut().expect("never empty");
+        if !line.is_empty() && line.chars().count() + 1 + word.chars().count() > room {
+            lines.push(word.to_string());
+        } else {
+            if !line.is_empty() {
+                line.push(' ');
+            }
+            line.push_str(word);
+        }
+    }
+    lines
 }
 
 pub fn truncate(text: &str, max: usize) -> String {
@@ -584,7 +624,11 @@ fn draw_steps(f: &mut Frame, app: &App, body: Rect) {
         let detail_style = if matches!(state, StepState::Pending) { theme::faint() } else { theme::muted() };
         match state {
             StepState::Done(detail) => lines.push(Line::from(Span::styled(format!("  {detail}"), detail_style))),
-            StepState::Failed(error) => lines.push(Line::from(Span::styled(format!("  {error}"), theme::fg(theme::PINK)))),
+            StepState::Failed(error) => {
+                for line in wrap_words(error, width.saturating_sub(2)) {
+                    lines.push(Line::from(Span::styled(format!("  {line}"), theme::fg(theme::PINK))));
+                }
+            }
             _ => lines.push(Line::from(Span::styled(format!("  {}", step.detail), detail_style))),
         }
         if let Some(command) = &step.command {

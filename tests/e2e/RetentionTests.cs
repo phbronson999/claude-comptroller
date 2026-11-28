@@ -44,6 +44,8 @@ public sealed class RetentionTests(OldDataHarness harness) : IClassFixture<OldDa
 
         Assert.Equal(14, retention.GetProperty("days").GetInt32());
         Assert.Equal(1, retention.GetProperty("lastPrune").GetProperty("removed").GetInt64());
-        Assert.True(DateTime.Parse(retention.GetProperty("nextPruneUtc").GetString()!, CultureInfo.InvariantCulture) > DateTime.UtcNow.AddMinutes(-1));
+        // Read as UTC: parsed as local time, the comparison fails in the evening west of UTC.
+        var next = DateTime.Parse(retention.GetProperty("nextPruneUtc").GetString()!, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal);
+        Assert.True(next > DateTime.UtcNow.AddMinutes(-1), $"next prune {next:u} is in the past");
     }
 }

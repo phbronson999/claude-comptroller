@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use comptroller_admin::activity;
+use comptroller_admin::certs::{self, Certificate};
 use comptroller_admin::service::State as ServiceState;
 use comptroller_admin::settings::{self, Kind, GROUPS, SETTINGS};
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
@@ -38,6 +39,22 @@ pub struct State {
     pub doc: Option<Result<Value, String>>,
     pub writable: bool,
     pub path: PathBuf,
+    /// Choosing the TLS certificate from the Windows store.
+    pub picker: Option<CertPicker>,
+}
+
+pub struct CertPicker {
+    /// `LocalMachine` or `CurrentUser`.
+    pub store: String,
+    pub certs: Result<Vec<Certificate>, String>,
+    /// The last row is "none".
+    pub row: usize,
+}
+
+impl CertPicker {
+    fn count(&self) -> usize {
+        self.certs.as_ref().map(Vec::len).unwrap_or(0) + 1
+    }
 }
 
 pub struct Editor {
@@ -93,6 +110,9 @@ impl State {
 pub fn on_key(app: &mut App, key: KeyEvent) {
     if app.settings.editing.is_some() {
         return on_editor_key(app, key);
+    }
+    if app.settings.picker.is_some() {
+        return on_picker_key(app, key);
     }
     let count = app.settings.rows().len();
     let s = &mut app.settings;
@@ -156,10 +176,52 @@ pub fn edit(app: &mut App) {
             let at = choices.iter().position(|c| value.as_str() == Some(c)).map(|p| p + 1).unwrap_or(0);
             s.set(index, Value::String(choices[at % choices.len()].into()));
         }
+        Kind::Certificate => {
+            // From the store the service will look in, as it stands with unsaved changes.
+            let store = settings::index_of("TLS.CertificateStore").and_then(|i| s.value(i).as_str().map(String::from)).unwrap_or_else(|| "LocalMachine".into());
+            let certs = certs::list(&store);
+            let current = value.as_str().unwrap_or_default().to_string();
+            let row = certs.as_ref().ok().and_then(|list| list.iter().position(|c| c.thumbprint.eq_ignore_ascii_case(&current))).unwrap_or(0);
+            s.picker = Some(CertPicker { store, certs, row });
+        }
         _ => {
             let text = settings::display(&SETTINGS[index], &value);
             s.editing = Some(Editor { cursor: text.chars().count(), text, error: None });
         }
+    }
+}
+
+fn on_picker_key(app: &mut App, key: KeyEvent) {
+    let s = &mut app.settings;
+    let (Some(index), Some(picker)) = (s.selected(), s.picker.as_ref()) else {
+        s.picker = None;
+        return;
+    };
+    let (count, row) = (picker.count(), picker.row);
+    let chosen = picker.certs.as_ref().ok().and_then(|list| list.get(row)).cloned();
+    match key.code {
+        KeyCode::Esc => s.picker = None,
+        KeyCode::Up | KeyCode::Char('k') => s.picker.as_mut().unwrap().row = (row + count - 1) % count,
+        KeyCode::Down | KeyCode::Char('j') => s.picker.as_mut().unwrap().row = (row + 1) % count,
+        // Typing a thumbprint, for a certificate that isn't listed.
+        KeyCode::Char('t') => {
+            let text = settings::display(&SETTINGS[index], &s.value(index));
+            s.picker = None;
+            s.editing = Some(Editor { cursor: text.chars().count(), text, error: None });
+        }
+        KeyCode::Enter => {
+            match chosen {
+                Some(cert) => {
+                    if let Some(reason) = cert.usable() {
+                        return app.toast(ToastKind::Warn, format!("{} can't be used: {reason}.", cert.subject));
+                    }
+                    s.set(index, Value::String(cert.thumbprint));
+                }
+                None => s.set(index, Value::String(String::new())),
+            }
+            s.picker = None;
+        }
+        _ => {}
     }
 }
 
@@ -228,9 +290,32 @@ pub fn save(app: &mut App) {
         return;
     }
 
+    // A newly chosen certificate in the machine store: the service's account must be able
+    // to read its private key, or the service won't start.
+    let thumbprint = settings::index_of("TLS.CertificateThumbprint")
+        .and_then(|i| s.pending_value(i))
+        .and_then(Value::as_str)
+        .filter(|t| !t.is_empty())
+        .map(String::from);
+    let store = settings::index_of("TLS.CertificateStore").and_then(|i| s.value(i).as_str().map(String::from)).unwrap_or_default();
+
     let path = s.path.clone();
     if let Err(e) = settings::save(&path, &s.pending) {
         return app.toast(ToastKind::Warn, e);
+    }
+    let mut note = "";
+    if let (Some(thumbprint), "LocalMachine") = (&thumbprint, store.as_str()) {
+        if app.snapshot.installed().is_some() {
+            let account = format!(r"NT SERVICE\{}", app.snapshot.service_name);
+            if let Err(e) = certs::grant_key_access(thumbprint, &account) {
+                app.settings.pending.clear();
+                app.settings.load(&path);
+                return app.toast(ToastKind::Warn, format!("Saved, but {account} can't read the certificate's private key yet, so the service won't start with it: {e}"));
+            }
+            note = " The service's account can read the certificate's key.";
+        } else {
+            note = " Install lets the service's account read the certificate's key.";
+        }
     }
     let restart: Vec<&'static str> = s.pending.iter().filter(|(i, _)| SETTINGS[*i].restart).map(|(i, _)| SETTINGS[*i].label).collect();
     let count = s.pending.len();
@@ -240,6 +325,7 @@ pub fn save(app: &mut App) {
 
     let running = app.snapshot.state() == ServiceState::Running || app.snapshot.console();
     let saved = if count == 1 { "Saved 1 setting".to_string() } else { format!("Saved {count} settings") };
+    let saved = if note.is_empty() { saved } else { format!("{saved}.{}", note.trim_end_matches('.')) };
     if restart.is_empty() {
         let tail = if running { ". The service uses it straight away." } else { "." };
         return app.toast(ToastKind::Success, format!("{saved}{tail}"));
@@ -425,6 +511,29 @@ pub fn draw(f: &mut Frame, app: &App, body: Rect) {
             lines.push(Line::from(Span::styled("Seat plans and their prices are edited on the Cost screen (4 on the Terminal, then s).", theme::muted())));
             lines.push(Line::default());
         }
+        if name == "TLS" {
+            match app.snapshot.health.as_ref().and_then(|h| h.tls.as_ref()) {
+                Some(tls) => lines.push(Line::from(vec![
+                    Span::styled(format!("{:<LABEL$}", "In use"), theme::text()),
+                    Span::styled(format!("{} · issued by {} · until {}", tls.subject, tls.issuer, &tls.not_after_utc[..10.min(tls.not_after_utc.len())]), theme::fg(theme::OK)),
+                ])),
+                None => lines.push(Line::from(vec![
+                    Span::styled(format!("{:<LABEL$}", "In use"), theme::text()),
+                    Span::styled("none: the service listens on plain HTTP", theme::fg(theme::ORANGE)),
+                ])),
+            }
+            lines.push(Line::default());
+            for text in [
+                "To use HTTPS: import a certificate for this server's name (from your company's CA, or a public one) into the computer's store, \
+                 choose it here, set Proxy → Listen URL to https://+:8443 (or another port), save, and restart.",
+                "Import a .pfx with: Import-PfxCertificate -FilePath server.pfx -CertStoreLocation Cert:\\LocalMachine\\My",
+            ] {
+                for line in wrap(text, width) {
+                    lines.push(Line::from(Span::styled(line, theme::muted())));
+                }
+                lines.push(Line::default());
+            }
+        }
         let pending_restart: Vec<&str> = app.restart_waiting.iter().flat_map(|(labels, _)| labels.iter().copied()).collect();
         if !pending_restart.is_empty() {
             lines.push(Line::from(Span::styled(
@@ -438,4 +547,59 @@ pub fn draw(f: &mut Frame, app: &App, body: Rect) {
     let height = inner.height as usize;
     let scroll = (selected_at + 6).saturating_sub(height) as u16;
     f.render_widget(Paragraph::new(lines).scroll((scroll, 0)).block(block), right);
+
+    if let Some(picker) = &s.picker {
+        draw_picker(f, picker, f.area());
+    }
+}
+
+fn draw_picker(f: &mut Frame, picker: &CertPicker, screen: Rect) {
+    use ratatui::widgets::{Block, BorderType, Clear, Padding};
+    let today = {
+        let day = (comptroller_admin::health::now() + comptroller_admin::local_offset()).div_euclid(86_400);
+        let (y, m, d) = comptroller_admin::cost::civil(day);
+        format!("{y:04}-{m:02}-{d:02}")
+    };
+    let mut lines = vec![
+        Line::from(Span::styled(format!("Certificates in {}\\My. Choose one issued for the name developers use.", picker.store), theme::muted())),
+        Line::default(),
+        Line::from(Span::styled(format!("  {:<34}{:<26}{:<12}{}", "ISSUED TO", "ISSUED BY", "EXPIRES", "NOTE"), theme::label())),
+    ];
+    match &picker.certs {
+        Err(e) => lines.push(Line::from(Span::styled(format!("  {e}"), theme::fg(theme::PINK)))),
+        Ok(list) if list.is_empty() => lines.push(Line::from(Span::styled("  None here yet: import one first (Import-PfxCertificate).", theme::faint()))),
+        Ok(_) => {}
+    }
+    let certs = picker.certs.as_ref().map(Vec::as_slice).unwrap_or_default();
+    for (row, cert) in certs.iter().enumerate() {
+        let expired = cert.not_after < today;
+        let (note, note_style) = match (cert.usable(), expired, cert.self_signed) {
+            (Some(reason), _, _) => (reason.to_string(), theme::fg(theme::PINK)),
+            (None, true, _) => ("expired".to_string(), theme::fg(theme::PINK)),
+            (None, false, true) => ("self-signed: clients must trust it by hand".to_string(), theme::fg(theme::ORANGE)),
+            (None, false, false) => (cert.dns_names.join(", "), theme::faint()),
+        };
+        let name = if cert.subject.is_empty() { cert.thumbprint[..8].to_string() } else { cert.subject.clone() };
+        let line = Line::from(vec![
+            Span::styled(format!("  {:<34}", crate::ui::truncate(&name, 32)), theme::text()),
+            Span::styled(format!("{:<26}", crate::ui::truncate(&cert.issuer, 24)), theme::muted()),
+            Span::styled(format!("{:<12}", cert.not_after), if expired { theme::fg(theme::PINK) } else { theme::text() }),
+            Span::styled(crate::ui::truncate(&note, 40), note_style),
+        ]);
+        lines.push(if row == picker.row { line.style(Style::new().bg(theme::SELECTION)) } else { line });
+    }
+    let none = Line::from(Span::styled("  None: plain HTTP", theme::muted()));
+    lines.push(if picker.row == certs.len() { none.style(Style::new().bg(theme::SELECTION)) } else { none });
+    lines.push(Line::default());
+    lines.push(Line::from([crate::widgets::keycap("enter", "choose"), crate::widgets::keycap("t", "type a thumbprint"), crate::widgets::keycap("esc", "cancel")].concat()).right_aligned());
+
+    let area = crate::widgets::centered(screen, 118, lines.len() as u16 + 4);
+    f.render_widget(Clear, area);
+    let block = Block::bordered()
+        .border_type(BorderType::Plain)
+        .border_style(theme::fg(theme::BORDER_FOCUS))
+        .style(Style::new().bg(theme::PANEL))
+        .title(Line::from(Span::styled(" Certificate ", theme::bold(theme::TEXT))))
+        .padding(Padding::new(2, 2, 1, 0));
+    f.render_widget(Paragraph::new(lines).block(block), area);
 }

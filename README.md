@@ -37,7 +37,7 @@ Early. It's been built and tested on single machines against a fake Anthropic an
 | Tray app for developer computers | Works |
 | Recording each request with its token usage | Works against the fake upstream; not yet checked against the real API |
 | Admin terminal: install, start, stop, status, preflight test, settings, users, radar, dashboard, cost, black box, archives and baseline | Works |
-| HTTPS on the service | Not built: use it on a network you trust, or put a TLS reverse proxy in front |
+| HTTPS, with a certificate from the Windows store | Works |
 | Sign-in through an identity provider (OIDC) | Not built |
 
 ## How it works
@@ -82,18 +82,28 @@ The endpoints and error messages are described in [contracts/api.md](contracts/a
 </tr>
 </table>
 
-### 2. Let developers reach it
+### 2. Turn on HTTPS and let developers reach it
 
-Out of the box the service listens on `http://localhost:8080` and accepts only the server itself. In the admin terminal press `c` (Settings) and change:
+Out of the box the service listens on `http://localhost:8080` and accepts only the server itself. Every request carries the developer's device token, their own Claude login and the prompt itself, so anything beyond the server itself should use HTTPS.
 
-| Setting | To |
-| - | - |
-| Proxy → Listen URL | `http://+:8080`, to listen on every address |
-| Access → Allowed addresses | your developers' networks, such as `10.0.0.0/8` |
-| Identity → Allowed group | your group's name or SID |
-| General → Organization name | shown to developers in the tray app and on the setup page |
+1. **Get a certificate** for the name developers will use, such as `claude.example.internal`. Use one from your company's certificate authority (with Active Directory Certificate Services: `certlm.msc` → Personal → Request New Certificate, with a Web Server template) or from a public one. Claude Code and the tray app trust what Windows trusts, so a company CA works on domain computers with nothing to set up on them. A self-signed certificate would have to be trusted by hand on every computer.
+2. **Import it** into the computer's store, if it came as a `.pfx`:
+   ```powershell
+   Import-PfxCertificate -FilePath claude.pfx -CertStoreLocation Cert:\LocalMachine\My -Password (Read-Host -AsSecureString)
+   ```
+3. **In the admin terminal**, press `c` (Settings) and change:
 
-Save with `s`; the listen URL needs a restart, which it offers. Status (`s` on the home screen) then shows the service, the proxy and its health checks.
+   | Setting | To |
+   | - | - |
+   | TLS → Certificate | press enter and choose it from the list. Saving also lets the service's account read its private key |
+   | Proxy → Listen URL | `https://+:8443`, to listen on every address |
+   | Access → Allowed addresses | your developers' networks, such as `10.0.0.0/8` |
+   | Identity → Allowed group | your group's name or SID |
+   | General → Organization name | shown to developers in the tray app and on the setup page |
+
+Save with `s`. The certificate and listen URL need a restart, which it offers. The preflight test (`p`) then checks the certificate the way developers' computers will: that Windows trusts it, that it names the server, and how long it has left. Status (`s` on the home screen) shows the certificate and the health checks, and the home screen warns a month before it expires.
+
+Plain HTTP (`http://+:8080`) still works, for a network you fully trust, but the home screen warns about it.
 
 <table>
 <tr>
@@ -105,14 +115,14 @@ Save with `s`; the listen URL needs a restart, which it offers. Status (`s` on t
 Then open the port in Windows Firewall, in an administrator PowerShell:
 
 ```powershell
-New-NetFirewallRule -DisplayName "claude-comptroller" -Direction Inbound -Protocol TCP -LocalPort 8080 -Action Allow
+New-NetFirewallRule -DisplayName "claude-comptroller" -Direction Inbound -Protocol TCP -LocalPort 8443 -Action Allow
 ```
 
-The service speaks plain HTTP. Device tokens travel in a header, so keep it on a network you trust until HTTPS is built, or put a TLS reverse proxy in front of it.
+When the certificate is renewed, choose the new one in Settings → TLS and restart: Windows gives a renewed certificate a new thumbprint.
 
 ### 3. Connect developers
 
-Send developers the setup page: **`http://<your server's name>:8080/_comptroller/download`**. It has the tray app, its SHA-256, and the steps for your sign-in mode. In short:
+Send developers the setup page: **`https://<your server's name>:8443/_comptroller/download`**. It has the tray app, its SHA-256, and the steps for your sign-in mode. In short:
 
 1. Run `claude-comptroller-connect.exe`, which sits by the clock.
 2. Enter the server address when asked.
@@ -197,7 +207,7 @@ One file, `comptroller.json`, beside the service. The admin terminal's Settings 
 | Setting | Default | Meaning |
 | - | - | - |
 | `General.OrganizationName` | empty | Shown in the tray app and on the setup page |
-| `Proxy.ListenUrl` | `http://localhost:8080` | Where the service listens |
+| `Proxy.ListenUrl` | `http://localhost:8080` | Where the service listens. `https://…` needs a certificate (below); `+` as the host listens on every address |
 | `Proxy.AdminPort` | 8081 | Port for `/health`, on `127.0.0.1` only |
 | `Proxy.ShutdownTimeoutSeconds` | 60 | How long a stop waits for replies in flight (5–600) |
 | `Proxy.UpstreamUrl` | `https://api.anthropic.com` | Where requests go |
@@ -209,6 +219,8 @@ One file, `comptroller.json`, beside the service. The admin terminal's Settings 
 | `Identity.TokenLifetimeDays` | 7 | 1–90. The tray app refreshes the token before then |
 | `Identity.CodeLifetimeHours` | 24 | How long a one-time code works (1–168) |
 | `Identity.TokenHeaderName` | `X-Comptroller-Token` | |
+| `TLS.CertificateThumbprint` | empty | The certificate for an `https://` listen URL, by thumbprint (spaces are ignored). The admin terminal lists and picks them |
+| `TLS.CertificateStore` | `LocalMachine` | Where to find it. `CurrentUser` only for a console run, such as testing on a laptop |
 | `Data.Folder` | `data` | Database folder, relative to the config file |
 | `Data.RetentionDays` | 14 | Days of requests kept: today and the days before it (1–365) |
 | `Data.PruneTime` | `02:00` | When the nightly prune runs, on the server's clock (24-hour in the file; the admin terminal shows and takes your local format) |
@@ -250,7 +262,10 @@ It checks that the four version numbers agree (the service's `.csproj`, both `Ca
 .\dev.ps1          # fake upstream: uses no seat
 .\dev.ps1 -Seed    # the same, after adding three weeks of traffic from four example people
 .\dev.ps1 -Real    # the real api.anthropic.com: uses your seat
+.\dev.ps1 -Https   # on https://localhost:8443 with the .NET development certificate (combines with the others)
 ```
+
+`-Https` uses the certificate `dotnet dev-certs https --trust` makes for `localhost`. Windows trusts it on that computer only, so Claude Code and the tray app accept it there.
 
 Then run the lines it prints in a second terminal. They set environment variables for that terminal only, so closing it puts everything back. If you put these variables in a Claude Code or VS Code settings file instead, remove them before you stop the service: Claude Code can't work while it points at a service that isn't running.
 
