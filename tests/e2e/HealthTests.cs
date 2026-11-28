@@ -12,7 +12,10 @@ public sealed class HealthTests(Harness harness) : IClassFixture<Harness>
     {
         var health = await Health();
 
-        Assert.Equal("0.1.0", health.GetProperty("version").GetString());
+        // Whatever the project says, so a version bump doesn't need a test change.
+        var project = System.Xml.Linq.XDocument.Load(Path.Combine(Harness.RepositoryRoot(), "service", "Comptroller.Service", "Comptroller.Service.csproj"));
+        var version = project.Descendants("Version").First().Value;
+        Assert.Equal(version, health.GetProperty("version").GetString());
         Assert.Equal(3, health.GetProperty("schemaVersion").GetInt32());
         Assert.Equal(0, health.GetProperty("recording").GetProperty("dropped").GetInt32());
         Assert.False(health.GetProperty("windowsService").GetBoolean());
