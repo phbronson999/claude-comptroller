@@ -66,6 +66,7 @@ The endpoints and error messages are described in [contracts/api.md](contracts/a
 ### What you need
 
 - **A 64-bit Windows server** (Windows Server, or Windows 10/11) that developers can reach. It needs no .NET or other runtime: everything is in one exe.
+- **A certificate for the server's name**, from your company's certificate authority or a public one, so connections are encrypted (step 2).
 - **Developer computers** on Windows 10 or 11 with Claude Code, each person signed in to their own Claude account.
 - **For Windows sign-in:** the server and the developer computers in the same Active Directory domain, and a group for the people allowed to use it (by default `Claude Code Users`). Without a domain, use one-time codes instead (`Identity.Mode` = `manual`).
 
@@ -207,7 +208,7 @@ One file, `comptroller.json`, beside the service. The admin terminal's Settings 
 | Setting | Default | Meaning |
 | - | - | - |
 | `General.OrganizationName` | empty | Shown in the tray app and on the setup page |
-| `Proxy.ListenUrl` | `http://localhost:8080` | Where the service listens. `https://…` needs a certificate (below); `+` as the host listens on every address |
+| `Proxy.ListenUrl` | `http://localhost:8080` | Where the service listens. The default reaches this computer only, so it needs no certificate; for developers, use `https://+:8443` with a certificate (`TLS`, below, and [step 2](#2-turn-on-https-and-let-developers-reach-it)). `+` as the host listens on every address |
 | `Proxy.AdminPort` | 8081 | Port for `/health`, on `127.0.0.1` only |
 | `Proxy.ShutdownTimeoutSeconds` | 60 | How long a stop waits for replies in flight (5–600) |
 | `Proxy.UpstreamUrl` | `https://api.anthropic.com` | Where requests go |
@@ -274,6 +275,8 @@ The tray app can run without touching your real settings:
 ```powershell
 cargo run --manifest-path connect\Cargo.toml -- --settings-root dev\sandbox --server http://localhost:8080
 ```
+
+With `dev.ps1 -Https`, use `--server https://localhost:8443`.
 
 `--device-name <name>` registers the same computer as another device.
 
